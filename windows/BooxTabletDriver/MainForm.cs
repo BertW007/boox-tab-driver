@@ -225,12 +225,15 @@ sealed class MainForm : Form
     {
         _clientLabel.Text = "Connected";
         _clientLabel.ForeColor = Color.Green;
+        // Minimize so injected mouse clicks don't hit this window
+        WindowState = FormWindowState.Minimized;
     }
 
     private void _server_OnClientDisconnected()
     {
         _clientLabel.Text = "Disconnected";
         _clientLabel.ForeColor = Color.Gray;
+        WindowState = FormWindowState.Normal;
     }
 
     private void UpdateServerPort()
