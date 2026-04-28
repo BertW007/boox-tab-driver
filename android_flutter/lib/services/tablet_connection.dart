@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 
@@ -37,6 +38,11 @@ class TabletConnection extends ChangeNotifier {
   int _frameCount = 0;
   final List<int> _frameSizes = [];
 
+  // ── PC screen info ──────────────────────────────────────────────────
+  int _pcScreenWidth = 1920;
+  int _pcScreenHeight = 1080;
+  String _ctrlBuffer = '';
+
   // ── Getters ─────────────────────────────────────────────────────────
   TransportType get transportType => _transportType;
   ConnState get state => _state;
@@ -48,6 +54,8 @@ class TabletConnection extends ChangeNotifier {
   int get videoPort => _videoPort;
   Uint8List? get latestFrame => _latestFrame;
   int get frameCount => _frameCount;
+  int get pcScreenWidth => _pcScreenWidth;
+  int get pcScreenHeight => _pcScreenHeight;
 
   void setTransport(TransportType type) {
     if (_state == ConnState.connected) return;
@@ -77,7 +85,16 @@ class TabletConnection extends ChangeNotifier {
       debugPrint('Control connected to $host:$_controlPort');
 
       _ctrlSubscription = _ctrlSocket!.listen(
-        (data) => debugPrint('Control: ${utf8.decode(data).trim()}'),
+        (data) {
+          _ctrlBuffer += utf8.decode(data);
+          final lines = _ctrlBuffer.split('\n');
+          _ctrlBuffer = lines.last;
+          for (int i = 0; i < lines.length - 1; i++) {
+            final line = lines[i].trim();
+            if (line.isEmpty) continue;
+            _handleControlMessage(line);
+          }
+        },
         onError: (e) => debugPrint('Control error: $e'),
         onDone: () {
           debugPrint('Control closed');
@@ -97,6 +114,19 @@ class TabletConnection extends ChangeNotifier {
       _errorMessage = 'Cannot connect to $host:$_controlPort — ${e.message}';
       notifyListeners();
       return false;
+    }
+  }
+
+  void _handleControlMessage(String line) {
+    try {
+      final msg = jsonDecode(line) as Map<String, dynamic>;
+      if (msg['type'] == 'screen_info') {
+        _pcScreenWidth = (msg['width'] as num).toInt();
+        _pcScreenHeight = (msg['height'] as num).toInt();
+        notifyListeners();
+      }
+    } catch (_) {
+      debugPrint('Control msg: $line');
     }
   }
 

@@ -98,10 +98,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final x = event.localPosition.dx;
     final y = event.localPosition.dy;
 
-    // Normalize to 0.0–1.0 so Windows can map to any screen resolution
+    // Map coordinates to the active image area (accounting for letterbox)
+    final (normX, normY) = _mapToImageArea(x, y, canvasSize);
+
     _connection.send(PenEvent(
-      x: canvasSize.width > 0 ? x / canvasSize.width : 0,
-      y: canvasSize.height > 0 ? y / canvasSize.height : 0,
+      x: normX,
+      y: normY,
       pressure: pressure,
       action: effectiveAction,
       tool: tool,
@@ -120,6 +122,35 @@ class _HomeScreenState extends State<HomeScreen> {
         _currentStroke.clear();
       }
     });
+  }
+
+  /// Maps canvas coordinates to normalised 0-1 within the displayed image area,
+  /// compensating for letterbox bars (BoxFit.contain with different aspect ratios).
+  (double, double) _mapToImageArea(double x, double y, Size canvas) {
+    if (canvas.isEmpty) return (0, 0);
+    final pcW = _connection.pcScreenWidth.toDouble();
+    final pcH = _connection.pcScreenHeight.toDouble();
+    final pcAspect = pcW / pcH;
+    final canvasAspect = canvas.width / canvas.height;
+
+    double imgW, imgH, xOff, yOff;
+    if (pcAspect > canvasAspect) {
+      // PC wider → image fills canvas width, bars at top/bottom
+      imgW = canvas.width;
+      imgH = canvas.width / pcAspect;
+      xOff = 0;
+      yOff = (canvas.height - imgH) / 2;
+    } else {
+      // PC narrower → image fills canvas height, bars at left/right
+      imgH = canvas.height;
+      imgW = canvas.height * pcAspect;
+      xOff = (canvas.width - imgW) / 2;
+      yOff = 0;
+    }
+
+    final nx = ((x - xOff) / imgW).clamp(0.0, 1.0);
+    final ny = ((y - yOff) / imgH).clamp(0.0, 1.0);
+    return (nx, ny);
   }
 
   void _showSnackBar(String msg) {
@@ -321,66 +352,50 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildConnectedBar() {
-    final transportLabels = {
-      TransportType.wifi: 'WiFi',
-      TransportType.usb: 'USB',
-      TransportType.bluetooth: 'BT',
+    final label = switch (_connection.transportType) {
+      TransportType.wifi => 'WiFi',
+      TransportType.usb => 'USB',
+      TransportType.bluetooth => 'BT',
     };
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       color: const Color(0xFF1B5E20),
       child: Row(
         children: [
           const SizedBox(
-            width: 8,
-            height: 8,
-            child: CircularProgressIndicator(
-                strokeWidth: 2, color: Colors.greenAccent),
+            width: 8, height: 8,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.greenAccent),
           ),
           const SizedBox(width: 8),
-          Text(
-            'Connected (${transportLabels[_connection.transportType]})',
-            style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w600),
-          ),
-          if (_connection.isVideoConnected) ...[
-            const SizedBox(width: 4),
-            const Icon(Icons.monitor, size: 14, color: Colors.white70),
-          ],
-          const Spacer(),
-          // Invert colors toggle
-          Tooltip(
-            message: 'Inwersja kolorów',
-            child: InkWell(
-              onTap: () => setState(() => _invertColors = !_invertColors),
-              borderRadius: BorderRadius.circular(4),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                child: Icon(
-                  _invertColors ? Icons.invert_colors : Icons.invert_colors_off,
-                  size: 20,
-                  color: _invertColors ? Colors.yellowAccent : Colors.white54,
-                ),
-              ),
+          Expanded(
+            child: Text(
+              'Połączono ($label)${_connection.isVideoConnected ? ' 🖥' : ''}',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
-          const SizedBox(width: 4),
-          Text(
-            '${_connection.host}:${_connection.controlPort}',
-            style: const TextStyle(color: Colors.white60, fontSize: 12),
+          // Invert colors toggle
+          IconButton(
+            onPressed: () => setState(() => _invertColors = !_invertColors),
+            icon: Icon(
+              _invertColors ? Icons.invert_colors : Icons.invert_colors_off,
+              color: _invertColors ? Colors.yellowAccent : Colors.white54,
+            ),
+            tooltip: 'Inwersja kolorów',
+            iconSize: 24,
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            constraints: const BoxConstraints(),
           ),
-          const SizedBox(width: 8),
-          SizedBox(
-            height: 24,
-            child: TextButton.icon(
-              onPressed: _disconnect,
-              icon: const Icon(Icons.link_off, size: 16),
-              label: const Text('Disconnect', style: TextStyle(fontSize: 13)),
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.white70,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
+          const SizedBox(width: 4),
+          ElevatedButton.icon(
+            onPressed: _disconnect,
+            icon: const Icon(Icons.link_off, size: 18),
+            label: const Text('Rozłącz'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade700,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             ),
           ),
         ],

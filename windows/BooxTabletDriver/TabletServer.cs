@@ -86,6 +86,15 @@ sealed class TabletServer : IDisposable
                 Log($"Device connected from {client.Client.RemoteEndPoint}");
                 OnClientConnected?.Invoke();
 
+                // Tell the device the PC screen resolution for letterbox compensation
+                try
+                {
+                    var b = Screen.PrimaryScreen!.Bounds;
+                    var msg = $"{{\"type\":\"screen_info\",\"width\":{b.Width},\"height\":{b.Height}}}\n";
+                    await _stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(msg));
+                }
+                catch { }
+
                 await HandleClient(ct);
 
                 Log("Device disconnected");
