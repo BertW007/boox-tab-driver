@@ -229,11 +229,18 @@ sealed class MainForm : Form
         WindowState = FormWindowState.Minimized;
     }
 
-    private void _server_OnClientDisconnected()
+    private async void _server_OnClientDisconnected()
     {
         _clientLabel.Text = "Disconnected";
         _clientLabel.ForeColor = Color.Gray;
         WindowState = FormWindowState.Normal;
+
+        // USB: re-run adb reverse so device can reconnect without cable replug
+        if (_modeSelector.SelectedIndex == 1 && _server.IsRunning)
+        {
+            await Task.Delay(800);
+            RunAdbReverse((int)_portInput.Value, (int)_videoPortInput.Value);
+        }
     }
 
     private void UpdateServerPort()
