@@ -145,7 +145,7 @@ sealed class TabletServer : IDisposable
             var pressure = root.GetProperty("pressure").GetSingle();
 
             if (action == "down")
-                Log($"Pen down x={x:F0} y={y:F0} p={pressure:F2}");
+                Log($"Pen down x={x:F3} y={y:F3} p={pressure:F2}");
 
             switch (action)
             {

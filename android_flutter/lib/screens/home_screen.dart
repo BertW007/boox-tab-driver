@@ -87,7 +87,14 @@ class _HomeScreenState extends State<HomeScreen> {
       _ => 'unknown',
     };
 
-    final pressure = event.pressure > 0 ? event.pressure : 0.5;
+    // Treat hover (pressure==0) as move without click
+    final rawPressure = event.pressure;
+    final isContact = rawPressure > 0.02;
+
+    // Remap 'down' to 'move' if no actual contact (hover)
+    final effectiveAction = (action == 'down' && !isContact) ? 'move' : action;
+    final pressure = isContact ? rawPressure : 0.0;
+
     final x = event.localPosition.dx;
     final y = event.localPosition.dy;
 
@@ -96,17 +103,17 @@ class _HomeScreenState extends State<HomeScreen> {
       x: canvasSize.width > 0 ? x / canvasSize.width : 0,
       y: canvasSize.height > 0 ? y / canvasSize.height : 0,
       pressure: pressure,
-      action: action,
+      action: effectiveAction,
       tool: tool,
     ));
 
     setState(() {
-      if (action == 'down') {
+      if (effectiveAction == 'down') {
         _currentStroke.clear();
         _currentStroke.add(_StrokePoint(x, y, pressure));
-      } else if (action == 'move') {
+      } else if (effectiveAction == 'move' && isContact) {
         _currentStroke.add(_StrokePoint(x, y, pressure));
-      } else if (action == 'up') {
+      } else if (effectiveAction == 'up' || action == 'up') {
         if (_currentStroke.length > 1) {
           _completedStrokes.add(_TimedStroke(List.from(_currentStroke)));
         }
@@ -413,6 +420,7 @@ class _HomeScreenState extends State<HomeScreen> {
           onPointerMove: (e) => _handlePointerEvent('move', e, canvasSize),
           onPointerUp: (e) => _handlePointerEvent('up', e, canvasSize),
           onPointerCancel: (e) => _handlePointerEvent('up', e, canvasSize),
+          onPointerHover: (e) => _handlePointerEvent('move', e, canvasSize),
           child: Stack(
             children: [
               if (_connection.latestFrame != null)
