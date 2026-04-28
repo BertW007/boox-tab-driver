@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -19,16 +20,26 @@ class _HomeScreenState extends State<HomeScreen> {
   final _connection = TabletConnection();
 
   final List<_StrokePoint> _currentStroke = [];
-  final List<List<_StrokePoint>> _completedStrokes = [];
+  final List<_TimedStroke> _completedStrokes = [];
+  Timer? _fadeTimer;
+
+  bool _invertColors = false;
 
   @override
   void initState() {
     super.initState();
     _connection.addListener(_onStateChanged);
+    _fadeTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (_completedStrokes.isEmpty) return;
+      setState(() {
+        _completedStrokes.removeWhere((s) => s.isDead);
+      });
+    });
   }
 
   @override
   void dispose() {
+    _fadeTimer?.cancel();
     _connection.removeListener(_onStateChanged);
     _connection.dispose();
     _ipController.dispose();
@@ -66,7 +77,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  void _handlePointerEvent(String action, PointerEvent event) {
+  void _handlePointerEvent(String action, PointerEvent event, Size canvasSize) {
     if (!_connection.isConnected) return;
 
     final tool = switch (event.kind) {
@@ -80,9 +91,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final x = event.localPosition.dx;
     final y = event.localPosition.dy;
 
+    // Normalize to 0.0–1.0 so Windows can map to any screen resolution
     _connection.send(PenEvent(
-      x: x,
-      y: y,
+      x: canvasSize.width > 0 ? x / canvasSize.width : 0,
+      y: canvasSize.height > 0 ? y / canvasSize.height : 0,
       pressure: pressure,
       action: action,
       tool: tool,
@@ -96,7 +108,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _currentStroke.add(_StrokePoint(x, y, pressure));
       } else if (action == 'up') {
         if (_currentStroke.length > 1) {
-          _completedStrokes.add(List.from(_currentStroke));
+          _completedStrokes.add(_TimedStroke(List.from(_currentStroke)));
         }
         _currentStroke.clear();
       }
@@ -330,6 +342,23 @@ class _HomeScreenState extends State<HomeScreen> {
             const Icon(Icons.monitor, size: 14, color: Colors.white70),
           ],
           const Spacer(),
+          // Invert colors toggle
+          Tooltip(
+            message: 'Inwersja kolorów',
+            child: InkWell(
+              onTap: () => setState(() => _invertColors = !_invertColors),
+              borderRadius: BorderRadius.circular(4),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                child: Icon(
+                  _invertColors ? Icons.invert_colors : Icons.invert_colors_off,
+                  size: 20,
+                  color: _invertColors ? Colors.yellowAccent : Colors.white54,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
           Text(
             '${_connection.host}:${_connection.controlPort}',
             style: const TextStyle(color: Colors.white60, fontSize: 12),
@@ -376,46 +405,66 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildCanvas() {
-    return Listener(
-      onPointerDown: (e) => _handlePointerEvent('down', e),
-      onPointerMove: (e) => _handlePointerEvent('move', e),
-      onPointerUp: (e) => _handlePointerEvent('up', e),
-      onPointerCancel: (e) => _handlePointerEvent('up', e),
-      child: Stack(
-        children: [
-          if (_connection.latestFrame != null)
-            Positioned.fill(
-              child: RepaintBoundary(
-                child: Image.memory(
-                  _connection.latestFrame!,
-                  fit: BoxFit.contain,
-                  width: double.infinity,
-                  height: double.infinity,
-                  gaplessPlayback: true,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final canvasSize = constraints.biggest;
+        return Listener(
+          onPointerDown: (e) => _handlePointerEvent('down', e, canvasSize),
+          onPointerMove: (e) => _handlePointerEvent('move', e, canvasSize),
+          onPointerUp: (e) => _handlePointerEvent('up', e, canvasSize),
+          onPointerCancel: (e) => _handlePointerEvent('up', e, canvasSize),
+          child: Stack(
+            children: [
+              if (_connection.latestFrame != null)
+                Positioned.fill(
+                  child: RepaintBoundary(
+                    child: _maybeInvert(
+                      Image.memory(
+                        _connection.latestFrame!,
+                        fit: BoxFit.contain,
+                        width: double.infinity,
+                        height: double.infinity,
+                        gaplessPlayback: true,
+                      ),
+                    ),
+                  ),
+                )
+              else
+                Container(color: const Color(0xFFF5F5F5)),
+
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: CustomPaint(painter: _GridPainter()),
                 ),
               ),
-            )
-          else
-            Container(color: const Color(0xFFF5F5F5)),
 
-          Positioned.fill(
-            child: IgnorePointer(
-              child: CustomPaint(painter: _GridPainter()),
-            ),
-          ),
-
-          Positioned.fill(
-            child: IgnorePointer(
-              child: CustomPaint(
-                painter: _StrokePainter(
-                  completedStrokes: _completedStrokes,
-                  currentStroke: _currentStroke,
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: CustomPaint(
+                    painter: _StrokePainter(
+                      completedStrokes: _completedStrokes,
+                      currentStroke: _currentStroke,
+                    ),
+                  ),
                 ),
               ),
-            ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
+    );
+  }
+
+  Widget _maybeInvert(Widget child) {
+    if (!_invertColors) return child;
+    return ColorFiltered(
+      colorFilter: const ColorFilter.matrix([
+        -1,  0,  0, 0, 255,
+         0, -1,  0, 0, 255,
+         0,  0, -1, 0, 255,
+         0,  0,  0, 1,   0,
+      ]),
+      child: child,
     );
   }
 }
@@ -425,6 +474,22 @@ class _StrokePoint {
   final double y;
   final double pressure;
   _StrokePoint(this.x, this.y, this.pressure);
+}
+
+class _TimedStroke {
+  final List<_StrokePoint> points;
+  final int _startMs;
+
+  _TimedStroke(this.points) : _startMs = DateTime.now().millisecondsSinceEpoch;
+
+  bool get isDead => DateTime.now().millisecondsSinceEpoch - _startMs > 2000;
+
+  double get opacity {
+    final age = DateTime.now().millisecondsSinceEpoch - _startMs;
+    if (age < 600) return 0.85;
+    if (age > 1800) return 0.0;
+    return 0.85 * (1.0 - (age - 600) / 1200.0);
+  }
 }
 
 class _GridPainter extends CustomPainter {
@@ -447,7 +512,7 @@ class _GridPainter extends CustomPainter {
 }
 
 class _StrokePainter extends CustomPainter {
-  final List<List<_StrokePoint>> completedStrokes;
+  final List<_TimedStroke> completedStrokes;
   final List<_StrokePoint> currentStroke;
 
   _StrokePainter({required this.completedStrokes, required this.currentStroke});
@@ -455,10 +520,10 @@ class _StrokePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     for (final stroke in completedStrokes) {
-      _drawStroke(canvas, stroke, 0.7);
+      _drawStroke(canvas, stroke.points, stroke.opacity);
     }
     if (currentStroke.length > 1) {
-      _drawStroke(canvas, currentStroke, 1.0);
+      _drawStroke(canvas, currentStroke, 0.9);
     }
   }
 
@@ -469,7 +534,7 @@ class _StrokePainter extends CustomPainter {
       final p1 = points[i + 1];
       final pressure = (p0.pressure + p1.pressure) / 2;
       final paint = Paint()
-        ..color = Colors.blue.withValues(alpha: opacity * 0.8)
+        ..color = Colors.blue.withValues(alpha: opacity * 0.85)
         ..strokeWidth = 1.0 + pressure * 6
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round

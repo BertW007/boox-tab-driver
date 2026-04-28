@@ -234,14 +234,16 @@ sealed class InputInjector : IDisposable
     // ── Mouse fallback ─────────────────────────────────────────────────
     private void InjectMouseDown(float x, float y)
     {
-        SendMouseEvent(x, y, MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_VIRTUALDESK);
+        var (px, py) = MapCoords(x, y);
+        SendMouseEvent(px, py, MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_VIRTUALDESK);
     }
 
     private void InjectMouseMove(float x, float y)
     {
+        var (px, py) = MapCoords(x, y);
         var flags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK;
         if (_penDown) flags |= MOUSEEVENTF_LEFTDOWN;
-        SendMouseEvent(x, y, flags);
+        SendMouseEvent(px, py, flags);
     }
 
     private void InjectMouseUp()
@@ -249,10 +251,10 @@ sealed class InputInjector : IDisposable
         SendMouseEvent(0, 0, MOUSEEVENTF_LEFTUP);
     }
 
-    private void SendMouseEvent(float x, float y, uint flags)
+    private void SendMouseEvent(int x, int y, uint flags)
     {
-        var absX = (int)(x / _screenW * 65535);
-        var absY = (int)(y / _screenH * 65535);
+        var absX = (int)((float)x / _screenW * 65535);
+        var absY = (int)((float)y / _screenH * 65535);
 
         var input = new INPUT
         {
@@ -271,8 +273,9 @@ sealed class InputInjector : IDisposable
     // ── Helpers ────────────────────────────────────────────────────────
     private (int x, int y) MapCoords(float tabletX, float tabletY)
     {
-        var x = (int)(tabletX / 2200 * _screenW);  // 2200 = Boox Tab X C width
-        var y = (int)(tabletY / 1650 * _screenH);  // 1650 = Boox Tab X C height
+        // tabletX/Y are normalized 0.0–1.0 (fraction of canvas size)
+        var x = (int)(tabletX * _screenW);
+        var y = (int)(tabletY * _screenH);
         return (Math.Clamp(x, 0, _screenW), Math.Clamp(y, 0, _screenH));
     }
 
