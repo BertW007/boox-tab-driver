@@ -1,0 +1,18 @@
+name: boox_tablet
+description: Turns Boox Tab X C into a graphics tablet for Windows.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Uncomment for Bluetooth support:
+  # flutter_bluetooth_serial: ^0.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

@@ -1,0 +1,17 @@
+# Android/Flutter
+android_flutter/.dart_tool/
+android_flutter/.flutter-plugins
+android_flutter/.flutter-plugins-dependencies
+android_flutter/build/
+android_flutter/.packages
+android_flutter/pubspec.lock
+
+# .NET / Visual Studio
+windows/**/bin/
+windows/**/obj/
+*.user
+*.suo
+.vs/
+
+# General
+*.log
