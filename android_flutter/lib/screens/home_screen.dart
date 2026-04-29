@@ -1,10 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-
 import '../models/pen_event.dart';
 import '../services/tablet_connection.dart';
 
@@ -34,6 +34,8 @@ class _HomeScreenState extends State<HomeScreen> {
   String _prevSoftKbText = '';
 
   bool _videoEnabled = true;
+  Offset? _hoverPos;
+  String _tabletIp = '';
 
   // Bluetooth device selection
   List<Map<String, String>> _btDevices = [];
@@ -54,13 +56,40 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     _checkPhysicalKeyboard();
 
-    // Handle ESC/back button forwarded from Kotlin (Android intercepts before Flutter)
+    // Global hardware keyboard handler — fires regardless of which widget has focus.
+    // This is the most reliable path for physical keyboards on BOOX.
+    HardwareKeyboard.instance.addHandler(_onHardwareKey);
+
+    // Fallback: ESC/back button forwarded from Kotlin via onBackPressed
     _inputChannel.setMethodCallHandler((call) async {
       if (call.method == 'physicalEsc' && _connection.isConnected) {
         _connection.sendKey({'type': 'key', 'action': 'down', 'char': '', 'label': 'Escape', 'logical': 0x10000001b});
         _connection.sendKey({'type': 'key', 'action': 'up',   'char': '', 'label': 'Escape', 'logical': 0x10000001b});
       }
     });
+  }
+
+  bool _onHardwareKey(KeyEvent event) {
+    if (!_connection.isConnected) return false;
+    _handleKeyEvent(event);
+    return false;
+  }
+
+  Future<void> _fetchTabletIp() async {
+    try {
+      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      for (final iface in interfaces) {
+        final name = iface.name.toLowerCase();
+        if (name.contains('wlan') || name.contains('wifi') || name.contains('eth')) {
+          for (final addr in iface.addresses) {
+            if (!addr.isLoopback) {
+              if (mounted) setState(() => _tabletIp = addr.address);
+              return;
+            }
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _checkPhysicalKeyboard() async {
@@ -74,6 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _fadeTimer?.cancel();
     _connection.removeListener(_onStateChanged);
     _connection.dispose();
@@ -89,6 +119,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     if (_connection.isConnected) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      _fetchTabletIp();
       _checkPhysicalKeyboard().then((_) {
         if (!_physicalKbConnected && mounted) {
           setState(() => _softKbVisible = true);
@@ -261,6 +292,7 @@ class _HomeScreenState extends State<HomeScreen> {
     ));
 
     setState(() {
+      _hoverPos = Offset(x, y);
       if (effectiveAction == 'down') {
         _currentStroke.clear();
         _currentStroke.add(_StrokePoint(x, y, pressure));
@@ -646,6 +678,18 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () => setState(() => _invertColors = !_invertColors)),
           _barBtn(label: '⊞', active: _fillScreen, tooltip: 'Wypełnij ekran',
               onTap: () => setState(() => _fillScreen = !_fillScreen)),
+          _barBtn(
+            label: '🖥',
+            active: _connection.isVideoConnected,
+            tooltip: _connection.isVideoConnected ? 'Wyłącz podgląd ekranu' : 'Włącz podgląd ekranu',
+            onTap: () {
+              if (_connection.isVideoConnected) {
+                _connection.disableVideo();
+              } else {
+                _connection.enableVideo();
+              }
+            },
+          ),
           if (!_physicalKbConnected)
             _barBtn(label: '⌨', active: _softKbVisible, tooltip: 'Klawiatura ekranowa',
                 onTap: _toggleSoftKb),
@@ -664,20 +708,32 @@ class _HomeScreenState extends State<HomeScreen> {
                   _connection.connectedPcName,
                   style: const TextStyle(color: Colors.white54, fontSize: 10),
                 ),
+              if (_connection.transportType == TransportType.wifi) ...[
+                if (_tabletIp.isNotEmpty)
+                  Text(
+                    '📱 $_tabletIp',
+                    style: const TextStyle(color: Colors.white54, fontSize: 10),
+                  ),
+                Text(
+                  '🖥 ${_connection.host}',
+                  style: const TextStyle(color: Colors.white54, fontSize: 10),
+                ),
+              ],
             ],
           ),
           const SizedBox(width: 8),
           // Disconnect
-          ElevatedButton(
-            onPressed: _disconnect,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red.shade700,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          GestureDetector(
+            onTap: _disconnect,
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.red.shade700,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text('✕', style: TextStyle(fontSize: 16, color: Colors.white, fontWeight: FontWeight.bold)),
             ),
-            child: const Text('✕', style: TextStyle(fontSize: 14)),
           ),
         ],
       ),
@@ -734,10 +790,6 @@ class _HomeScreenState extends State<HomeScreen> {
         final canvasSize = constraints.biggest;
         return Focus(
           autofocus: true,
-          onKeyEvent: (_, event) {
-            _handleKeyEvent(event);
-            return KeyEventResult.handled;
-          },
           child: Listener(
             onPointerDown: (e) => _handlePointerEvent('down', e, canvasSize),
             onPointerMove: (e) => _handlePointerEvent('move', e, canvasSize),
@@ -779,6 +831,15 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   ),
+
+                  if (_hoverPos != null && _connection.cursorShape != 'arrow')
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: CustomPaint(
+                          painter: _CursorPainter(_hoverPos!, _connection.cursorShape),
+                        ),
+                      ),
+                    ),
 
                   // Hidden TextField for soft keyboard input
                   Positioned(
@@ -836,6 +897,159 @@ class _TimedStroke {
     if (age > 1800) return 0.0;
     return 0.85 * (1.0 - (age - 600) / 1200.0);
   }
+}
+
+class _CursorPainter extends CustomPainter {
+  final Offset pos;
+  final String shape;
+  _CursorPainter(this.pos, this.shape);
+
+  static Paint _stroke(Color c, double w) => Paint()
+    ..color = c
+    ..strokeWidth = w
+    ..style = PaintingStyle.stroke
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round;
+
+  // Draw shape twice: white outline then black stroke for contrast on any bg.
+  void _double(Canvas canvas, void Function(Canvas, Paint) draw) {
+    draw(canvas, _stroke(Colors.white, 3.5));
+    draw(canvas, _stroke(Colors.black, 1.8));
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    switch (shape) {
+      case 'ibeam':     _drawIBeam(canvas);    break;
+      case 'wait':      _drawWait(canvas);      break;
+      case 'crosshair': _drawCrosshair(canvas); break;
+      case 'size_ew':   _drawArrowH(canvas);    break;
+      case 'size_ns':   _drawArrowV(canvas);    break;
+      case 'size_nwse': _drawArrowDiag(canvas, nwse: true);  break;
+      case 'size_nesw': _drawArrowDiag(canvas, nwse: false); break;
+      case 'size_all':  _drawArrowAll(canvas);  break;
+      case 'no':        _drawNo(canvas);        break;
+      case 'hand':      _drawHand(canvas);      break;
+      default:          _drawArrow(canvas);     break;
+    }
+  }
+
+  void _drawArrow(Canvas canvas) {
+    final path = Path()
+      ..moveTo(pos.dx, pos.dy)
+      ..lineTo(pos.dx, pos.dy + 20)
+      ..lineTo(pos.dx + 5, pos.dy + 14)
+      ..lineTo(pos.dx + 11, pos.dy + 22)
+      ..lineTo(pos.dx + 14, pos.dy + 21)
+      ..lineTo(pos.dx + 8, pos.dy + 13)
+      ..lineTo(pos.dx + 15, pos.dy + 13)
+      ..close();
+    canvas.drawPath(path, _stroke(Colors.white, 3.5));
+    canvas.drawPath(path, _stroke(Colors.black, 1.8));
+  }
+
+  void _drawIBeam(Canvas canvas) {
+    const h = 20.0; const w = 8.0;
+    _double(canvas, (c, p) {
+      c.drawLine(Offset(pos.dx, pos.dy - h / 2), Offset(pos.dx, pos.dy + h / 2), p);
+      c.drawLine(Offset(pos.dx - w / 2, pos.dy - h / 2), Offset(pos.dx + w / 2, pos.dy - h / 2), p);
+      c.drawLine(Offset(pos.dx - w / 2, pos.dy + h / 2), Offset(pos.dx + w / 2, pos.dy + h / 2), p);
+    });
+  }
+
+  void _drawWait(Canvas canvas) {
+    final path = Path()
+      ..moveTo(pos.dx - 10, pos.dy - 14)
+      ..lineTo(pos.dx + 10, pos.dy - 14)
+      ..lineTo(pos.dx, pos.dy)
+      ..lineTo(pos.dx + 10, pos.dy + 14)
+      ..lineTo(pos.dx - 10, pos.dy + 14)
+      ..lineTo(pos.dx, pos.dy)
+      ..close();
+    canvas.drawPath(path, _stroke(Colors.white, 3.5));
+    canvas.drawPath(path, _stroke(Colors.black, 1.8));
+  }
+
+  void _drawCrosshair(Canvas canvas) {
+    const arm = 18.0; const gap = 4.0;
+    _double(canvas, (c, p) {
+      c.drawLine(Offset(pos.dx - arm, pos.dy), Offset(pos.dx - gap, pos.dy), p);
+      c.drawLine(Offset(pos.dx + gap, pos.dy), Offset(pos.dx + arm, pos.dy), p);
+      c.drawLine(Offset(pos.dx, pos.dy - arm), Offset(pos.dx, pos.dy - gap), p);
+      c.drawLine(Offset(pos.dx, pos.dy + gap), Offset(pos.dx, pos.dy + arm), p);
+      c.drawCircle(pos, gap, p);
+    });
+  }
+
+  void _drawDoubleArrow(Canvas canvas, Offset dir) {
+    final perp = Offset(-dir.dy, dir.dx);
+    const shaft = 16.0; const head = 7.0;
+
+    final path = Path();
+    path.moveTo(pos.dx - dir.dx * shaft, pos.dy - dir.dy * shaft);
+    path.lineTo(pos.dx - dir.dx * (shaft - head) + perp.dx * head * 0.5,
+                pos.dy - dir.dy * (shaft - head) + perp.dy * head * 0.5);
+    path.lineTo(pos.dx - dir.dx * (shaft - head) - perp.dx * head * 0.5,
+                pos.dy - dir.dy * (shaft - head) - perp.dy * head * 0.5);
+    path.close();
+    path.moveTo(pos.dx + dir.dx * shaft, pos.dy + dir.dy * shaft);
+    path.lineTo(pos.dx + dir.dx * (shaft - head) + perp.dx * head * 0.5,
+                pos.dy + dir.dy * (shaft - head) + perp.dy * head * 0.5);
+    path.lineTo(pos.dx + dir.dx * (shaft - head) - perp.dx * head * 0.5,
+                pos.dy + dir.dy * (shaft - head) - perp.dy * head * 0.5);
+    path.close();
+    canvas.drawPath(path, _stroke(Colors.white, 3.5));
+    canvas.drawPath(path, _stroke(Colors.black, 1.8));
+
+    _double(canvas, (c, p) {
+      c.drawLine(Offset(pos.dx - dir.dx * shaft, pos.dy - dir.dy * shaft),
+                 Offset(pos.dx + dir.dx * shaft, pos.dy + dir.dy * shaft), p);
+    });
+  }
+
+  void _drawArrowH(Canvas canvas) => _drawDoubleArrow(canvas, const Offset(1, 0));
+  void _drawArrowV(Canvas canvas) => _drawDoubleArrow(canvas, const Offset(0, 1));
+
+  void _drawArrowDiag(Canvas canvas, {required bool nwse}) {
+    const s = 0.7071; // 1/sqrt(2)
+    _drawDoubleArrow(canvas, nwse ? const Offset(s, s) : const Offset(s, -s));
+  }
+
+  void _drawArrowAll(Canvas canvas) {
+    for (final dir in [
+      const Offset(1, 0), const Offset(0, 1),
+    ]) {
+      _drawDoubleArrow(canvas, dir);
+    }
+  }
+
+  void _drawNo(Canvas canvas) {
+    const r = 13.0;
+    _double(canvas, (c, p) {
+      c.drawCircle(pos, r, p);
+      final s = r * 0.707;
+      c.drawLine(Offset(pos.dx - s, pos.dy - s), Offset(pos.dx + s, pos.dy + s), p);
+    });
+  }
+
+  void _drawHand(Canvas canvas) {
+    final path = Path()
+      ..moveTo(pos.dx - 2, pos.dy)
+      ..lineTo(pos.dx - 2, pos.dy - 18)
+      ..lineTo(pos.dx + 2, pos.dy - 18)
+      ..lineTo(pos.dx + 2, pos.dy + 2)
+      ..lineTo(pos.dx + 9, pos.dy + 2)
+      ..lineTo(pos.dx + 9, pos.dy + 10)
+      ..lineTo(pos.dx - 9, pos.dy + 10)
+      ..lineTo(pos.dx - 9, pos.dy)
+      ..close();
+    canvas.drawPath(path, _stroke(Colors.white, 3.5));
+    canvas.drawPath(path, _stroke(Colors.black, 1.8));
+  }
+
+  @override
+  bool shouldRepaint(covariant _CursorPainter old) =>
+      old.pos != pos || old.shape != shape;
 }
 
 class _GridPainter extends CustomPainter {

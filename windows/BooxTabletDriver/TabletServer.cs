@@ -1,9 +1,62 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
 namespace BooxTabletDriver;
+
+static class CursorTracker
+{
+    [StructLayout(LayoutKind.Sequential)]
+    struct CURSORINFO { public int cbSize; public int flags; public IntPtr hCursor; public POINT ptScreenPos; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct POINT { public int x; public int y; }
+
+    [DllImport("user32.dll")] static extern bool GetCursorInfo(ref CURSORINFO pci);
+    [DllImport("user32.dll")] static extern IntPtr LoadCursor(IntPtr hInst, int id);
+
+    const int OCR_NORMAL   = 32512;
+    const int OCR_IBEAM    = 32513;
+    const int OCR_WAIT     = 32514;
+    const int OCR_CROSS    = 32515;
+    const int OCR_SIZENWSE = 32642;
+    const int OCR_SIZENESW = 32643;
+    const int OCR_SIZEWE   = 32644;
+    const int OCR_SIZENS   = 32645;
+    const int OCR_SIZEALL  = 32646;
+    const int OCR_NO       = 32648;
+    const int OCR_HAND     = 32649;
+
+    static readonly (IntPtr handle, string name)[] _map;
+
+    static CursorTracker()
+    {
+        _map =
+        [
+            (LoadCursor(IntPtr.Zero, OCR_NORMAL),   "arrow"),
+            (LoadCursor(IntPtr.Zero, OCR_IBEAM),    "ibeam"),
+            (LoadCursor(IntPtr.Zero, OCR_WAIT),     "wait"),
+            (LoadCursor(IntPtr.Zero, OCR_CROSS),    "crosshair"),
+            (LoadCursor(IntPtr.Zero, OCR_SIZENWSE), "size_nwse"),
+            (LoadCursor(IntPtr.Zero, OCR_SIZENESW), "size_nesw"),
+            (LoadCursor(IntPtr.Zero, OCR_SIZEWE),   "size_ew"),
+            (LoadCursor(IntPtr.Zero, OCR_SIZENS),   "size_ns"),
+            (LoadCursor(IntPtr.Zero, OCR_SIZEALL),  "size_all"),
+            (LoadCursor(IntPtr.Zero, OCR_NO),       "no"),
+            (LoadCursor(IntPtr.Zero, OCR_HAND),     "hand"),
+        ];
+    }
+
+    public static string GetShape()
+    {
+        var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
+        if (!GetCursorInfo(ref ci)) return "arrow";
+        foreach (var (h, name) in _map)
+            if (h == ci.hCursor) return name;
+        return "arrow";
+    }
+}
 
 enum TransportMode { WiFi, Usb, Bluetooth }
 
@@ -97,7 +150,11 @@ sealed class TabletServer : IDisposable
                 }
                 catch { }
 
+                var cursorCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                var cursorTask = PollCursorAsync(cursorCts.Token);
                 await HandleClient(ct);
+                cursorCts.Cancel();
+                await cursorTask.ConfigureAwait(false);
 
                 _injector.ReleaseAll();
                 Log("Device disconnected");
@@ -138,6 +195,27 @@ sealed class TabletServer : IDisposable
             }
         }
         catch (IOException ex) { Log($"Client IO error: {ex.Message}"); }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task PollCursorAsync(CancellationToken ct)
+    {
+        var last = "";
+        try
+        {
+            while (!ct.IsCancellationRequested && _stream != null)
+            {
+                var shape = CursorTracker.GetShape();
+                if (shape != last)
+                {
+                    last = shape;
+                    var msg = $"{{\"type\":\"cursor\",\"shape\":\"{shape}\"}}\n";
+                    try { await _stream.WriteAsync(Encoding.UTF8.GetBytes(msg), ct); }
+                    catch { break; }
+                }
+                await Task.Delay(80, ct);
+            }
+        }
         catch (OperationCanceledException) { }
     }
 

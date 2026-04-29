@@ -47,6 +47,7 @@ class TabletConnection extends ChangeNotifier {
   int _pcScreenHeight = 1080;
   String _connectedPcName = '';
   String _ctrlBuffer = '';
+  String _cursorShape = 'arrow';
 
   // ── Auto-reconnect ──────────────────────────────────────────────────
   bool _intentionalDisconnect = false;
@@ -72,6 +73,7 @@ class TabletConnection extends ChangeNotifier {
   int get pcScreenWidth => _pcScreenWidth;
   int get pcScreenHeight => _pcScreenHeight;
   String get connectedPcName => _connectedPcName;
+  String get cursorShape => _cursorShape;
   bool get isReconnecting => _reconnectTimer?.isActive == true;
   String get reconnectStatus => _reconnectStatus;
   bool get videoEnabled => _videoEnabled;
@@ -88,6 +90,28 @@ class TabletConnection extends ChangeNotifier {
   void setBtDevice(String address) => _btDeviceAddress = address;
   void setAutoReconnect(bool value) => _autoReconnect = value;
   void setVideoEnabled(bool value) => _videoEnabled = value;
+
+  Future<void> enableVideo() async {
+    if (!isConnected || _videoConnected) return;
+    _videoEnabled = true;
+    final host = switch (_transportType) {
+      TransportType.wifi => _host,
+      TransportType.usb || TransportType.bluetooth => '127.0.0.1',
+    };
+    await _connectVideo(host);
+  }
+
+  void disableVideo() {
+    _videoEnabled = false;
+    _videoSubscription?.cancel();
+    _videoSocket?.destroy();
+    _videoSocket = null;
+    _videoConnected = false;
+    _latestFrame = null;
+    _videoBuffer.clear();
+    _expectedFrameSize = 0;
+    notifyListeners();
+  }
 
   // ── Connect ─────────────────────────────────────────────────────────
   Future<bool> connect() async {
@@ -201,6 +225,12 @@ class TabletConnection extends ChangeNotifier {
         _pcScreenHeight = (msg['height'] as num).toInt();
         _connectedPcName = msg['hostname'] as String? ?? '';
         notifyListeners();
+      } else if (msg['type'] == 'cursor') {
+        final shape = msg['shape'] as String? ?? 'arrow';
+        if (shape != _cursorShape) {
+          _cursorShape = shape;
+          notifyListeners();
+        }
       }
     } catch (_) {
       debugPrint('Control msg: $line');
