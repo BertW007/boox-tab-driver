@@ -15,6 +15,7 @@ sealed class InputInjector : IDisposable
     private bool _touchInited;
     private uint _pointerId = 0;
     private bool _penDown;
+    private string _penButton = "primary";
     private bool _touchSupported;
 
     // ── Screen info ────────────────────────────────────────────────────
@@ -25,11 +26,18 @@ sealed class InputInjector : IDisposable
     public InjectorBackend Backend { get; private set; } = InjectorBackend.None;
 
     // ── Win32 constants ────────────────────────────────────────────────
-    private const uint INPUT_MOUSE = 0;
-    private const uint MOUSEEVENTF_MOVE = 0x0001;
-    private const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
-    private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
-    private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+    private const uint INPUT_MOUSE    = 0;
+    private const uint INPUT_KEYBOARD = 1;
+    private const uint MOUSEEVENTF_MOVE        = 0x0001;
+    private const uint MOUSEEVENTF_LEFTDOWN    = 0x0002;
+    private const uint MOUSEEVENTF_LEFTUP      = 0x0004;
+    private const uint MOUSEEVENTF_RIGHTDOWN   = 0x0008;
+    private const uint MOUSEEVENTF_RIGHTUP     = 0x0010;
+    private const uint MOUSEEVENTF_MIDDLEDOWN  = 0x0020;
+    private const uint MOUSEEVENTF_MIDDLEUP    = 0x0040;
+    private const uint MOUSEEVENTF_WHEEL       = 0x0800;
+    private const uint MOUSEEVENTF_HWHEEL      = 0x1000;
+    private const uint MOUSEEVENTF_ABSOLUTE    = 0x8000;
     private const uint MOUSEEVENTF_VIRTUALDESK = 0x4000;
 
     private const uint POINTER_FLAG_INRANGE   = 0x00000002;
@@ -37,6 +45,9 @@ sealed class InputInjector : IDisposable
     private const uint POINTER_FLAG_DOWN      = 0x00010000;
     private const uint POINTER_FLAG_UPDATE    = 0x00020000;
     private const uint POINTER_FLAG_UP        = 0x00040000;
+
+    private const uint KEYEVENTF_KEYUP   = 0x0002;
+    private const uint KEYEVENTF_UNICODE = 0x0004;
 
     private const uint TOUCH_FEEDBACK_DEFAULT = 1;
     private const uint TOUCH_MASK_CONTACTAREA = 0x00000001;
@@ -82,11 +93,14 @@ sealed class InputInjector : IDisposable
         public uint pressure;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
+    // INPUT is a C union — use Explicit layout so both mi and ki occupy the same memory.
+    // On x64: type(4) + 4-byte padding + union(32) = 40 bytes total.
+    [StructLayout(LayoutKind.Explicit, Size = 40)]
     private struct INPUT
     {
-        public uint type;
-        public MOUSEINPUT mi;
+        [FieldOffset(0)] public uint type;
+        [FieldOffset(8)] public MOUSEINPUT mi;
+        [FieldOffset(8)] public KEYBDINPUT ki;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -95,6 +109,16 @@ sealed class InputInjector : IDisposable
         public int dx;
         public int dy;
         public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public nint dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
         public uint dwFlags;
         public uint time;
         public nint dwExtraInfo;
@@ -143,13 +167,14 @@ sealed class InputInjector : IDisposable
     }
 
     // ── Public API ─────────────────────────────────────────────────────
-    public void PenDown(float x, float y, float pressure)
+    public void PenDown(float x, float y, float pressure, string button = "primary")
     {
-        if (Backend == InjectorBackend.Touch)
+        if (Backend == InjectorBackend.Touch && button == "primary")
             InjectTouchDown(x, y, pressure);
-        if (Backend == InjectorBackend.Mouse)  // also catches auto-fallback from touch
-            InjectMouseDown(x, y);
+        if (Backend == InjectorBackend.Mouse)
+            InjectMouseDown(x, y, button);
         _penDown = true;
+        _penButton = button;
     }
 
     public void PenMove(float x, float y, float pressure)
@@ -165,8 +190,27 @@ sealed class InputInjector : IDisposable
         if (Backend == InjectorBackend.Touch)
             InjectTouchUp();
         if (Backend == InjectorBackend.Mouse)
-            InjectMouseUp();
+            InjectMouseUp(_penButton);
         _penDown = false;
+        _penButton = "primary";
+    }
+
+    public void InjectScroll(float x, float y, float dx, float dy)
+    {
+        var (px, py) = MapCoords(x, y);
+        // Move cursor to scroll position first
+        SendMouseEvent(px, py, MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK, 0);
+        // Vertical scroll: Flutter positive dy = scroll down, Windows negative = scroll down
+        if (dy != 0)
+        {
+            var delta = (int)(-dy * 1.5f);
+            SendMouseEvent(0, 0, MOUSEEVENTF_WHEEL, (uint)delta);
+        }
+        if (dx != 0)
+        {
+            var delta = (int)(dx * 1.5f);
+            SendMouseEvent(0, 0, MOUSEEVENTF_HWHEEL, (uint)delta);
+        }
     }
 
     // ── Touch injection ────────────────────────────────────────────────
@@ -232,29 +276,46 @@ sealed class InputInjector : IDisposable
     }
 
     // ── Mouse fallback ─────────────────────────────────────────────────
-    private void InjectMouseDown(float x, float y)
+    private void InjectMouseDown(float x, float y, string button = "primary")
     {
         var (px, py) = MapCoords(x, y);
-        SendMouseEvent(px, py, MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_VIRTUALDESK);
+        var downFlag = button switch {
+            "secondary" => MOUSEEVENTF_RIGHTDOWN,
+            "middle"    => MOUSEEVENTF_MIDDLEDOWN,
+            _           => MOUSEEVENTF_LEFTDOWN,
+        };
+        SendMouseEvent(px, py, MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | downFlag | MOUSEEVENTF_VIRTUALDESK, 0);
     }
 
     private void InjectMouseMove(float x, float y)
     {
         var (px, py) = MapCoords(x, y);
         var flags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK;
-        if (_penDown) flags |= MOUSEEVENTF_LEFTDOWN;
-        SendMouseEvent(px, py, flags);
+        if (_penDown)
+        {
+            flags |= _penButton switch {
+                "secondary" => MOUSEEVENTF_RIGHTDOWN,
+                "middle"    => MOUSEEVENTF_MIDDLEDOWN,
+                _           => MOUSEEVENTF_LEFTDOWN,
+            };
+        }
+        SendMouseEvent(px, py, flags, 0);
     }
 
-    private void InjectMouseUp()
+    private void InjectMouseUp(string button = "primary")
     {
-        SendMouseEvent(0, 0, MOUSEEVENTF_LEFTUP);
+        var upFlag = button switch {
+            "secondary" => MOUSEEVENTF_RIGHTUP,
+            "middle"    => MOUSEEVENTF_MIDDLEUP,
+            _           => MOUSEEVENTF_LEFTUP,
+        };
+        SendMouseEvent(0, 0, upFlag, 0);
     }
 
-    private void SendMouseEvent(int x, int y, uint flags)
+    private void SendMouseEvent(int x, int y, uint flags, uint mouseData)
     {
-        var absX = (int)((float)x / _screenW * 65535);
-        var absY = (int)((float)y / _screenH * 65535);
+        var absX = (flags & MOUSEEVENTF_ABSOLUTE) != 0 ? (int)((float)x / _screenW * 65535) : 0;
+        var absY = (flags & MOUSEEVENTF_ABSOLUTE) != 0 ? (int)((float)y / _screenH * 65535) : 0;
 
         var input = new INPUT
         {
@@ -263,10 +324,69 @@ sealed class InputInjector : IDisposable
             {
                 dx = absX,
                 dy = absY,
+                mouseData = mouseData,
                 dwFlags = flags,
             }
         };
 
+        SendInput(1, [input], Marshal.SizeOf<INPUT>());
+    }
+
+    // ── Keyboard injection ─────────────────────────────────────────────
+    private static readonly Dictionary<string, ushort> _keyLabelToVk = new()
+    {
+        ["Backspace"]   = 0x08, ["Tab"]         = 0x09, ["Enter"]       = 0x0D,
+        ["Escape"]      = 0x1B, ["Space"]        = 0x20, ["Delete"]      = 0x2E,
+        ["Insert"]      = 0x2D, ["Home"]         = 0x24, ["End"]         = 0x23,
+        ["Page Up"]     = 0x21, ["Page Down"]    = 0x22,
+        ["Arrow Left"]  = 0x25, ["Arrow Up"]     = 0x26,
+        ["Arrow Right"] = 0x27, ["Arrow Down"]   = 0x28,
+        ["Caps Lock"]   = 0x14, ["Num Lock"]     = 0x90, ["Scroll Lock"] = 0x91,
+        ["Print Screen"]= 0x2C, ["Pause"]        = 0x13,
+        ["Shift Left"]  = 0xA0, ["Shift Right"]  = 0xA1,
+        ["Control Left"]= 0xA2, ["Control Right"]= 0xA3,
+        ["Alt Left"]    = 0xA4, ["Alt Right"]    = 0xA5,
+        ["Meta Left"]   = 0x5B, ["Meta Right"]   = 0x5C,
+        ["F1"]  = 0x70, ["F2"]  = 0x71, ["F3"]  = 0x72, ["F4"]  = 0x73,
+        ["F5"]  = 0x74, ["F6"]  = 0x75, ["F7"]  = 0x76, ["F8"]  = 0x77,
+        ["F9"]  = 0x78, ["F10"] = 0x79, ["F11"] = 0x7A, ["F12"] = 0x7B,
+    };
+
+    public void InjectKey(string action, string ch, string label)
+    {
+        var isDown = action == "down";
+        var upFlag = isDown ? 0u : KEYEVENTF_KEYUP;
+
+        // Printable Unicode character — inject directly (bypasses layout mapping)
+        if (ch.Length == 1 && ch[0] >= 0x20 && ch[0] != 0x7F)
+        {
+            SendKeyEvent(0, (ushort)ch[0], KEYEVENTF_UNICODE | upFlag);
+            return;
+        }
+
+        // Special key: look up Windows VK by Flutter key label
+        if (_keyLabelToVk.TryGetValue(label, out var vk))
+        {
+            SendKeyEvent(vk, 0, upFlag);
+            return;
+        }
+
+        // Single ASCII letter or digit (e.g. Ctrl+C sends label="c", char empty)
+        if (label.Length == 1)
+        {
+            var c = char.ToUpper(label[0]);
+            if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
+                SendKeyEvent((ushort)c, 0, upFlag);
+        }
+    }
+
+    private void SendKeyEvent(ushort vk, ushort scan, uint flags)
+    {
+        var input = new INPUT
+        {
+            type = INPUT_KEYBOARD,
+            ki = new KEYBDINPUT { wVk = vk, wScan = scan, dwFlags = flags },
+        };
         SendInput(1, [input], Marshal.SizeOf<INPUT>());
     }
 

@@ -146,27 +146,47 @@ sealed class TabletServer : IDisposable
             var root = doc.RootElement;
 
             var type = root.GetProperty("type").GetString();
+
+            if (type == "key")
+            {
+                var action = root.GetProperty("action").GetString() ?? "down";
+                var ch    = root.TryGetProperty("char",    out var cProp) ? cProp.GetString() ?? "" : "";
+                var label = root.TryGetProperty("label",   out var lProp) ? lProp.GetString() ?? "" : "";
+                _injector.InjectKey(action, ch, label);
+                return;
+            }
+
+            if (type == "scroll")
+            {
+                var sx = root.TryGetProperty("x",  out var sxP) ? sxP.GetSingle() : 0f;
+                var sy = root.TryGetProperty("y",  out var syP) ? syP.GetSingle() : 0f;
+                var dx = root.TryGetProperty("dx", out var dxP) ? dxP.GetSingle() : 0f;
+                var dy = root.TryGetProperty("dy", out var dyP) ? dyP.GetSingle() : 0f;
+                _injector.InjectScroll(sx, sy, dx, dy);
+                return;
+            }
+
             if (type != "pen") return;
 
-            var action = root.GetProperty("action").GetString() ?? "move";
+            var penAction = root.GetProperty("action").GetString() ?? "move";
             var x = root.GetProperty("x").GetSingle();
             var y = root.GetProperty("y").GetSingle();
             var pressure = root.GetProperty("pressure").GetSingle();
+            var button = root.TryGetProperty("button", out var btnProp) ? btnProp.GetString() ?? "primary" : "primary";
 
-            if (action == "down")
-                Log($"Pen down x={x:F3} y={y:F3} p={pressure:F2}");
+            if (penAction == "down")
+                Log($"Pen down x={x:F3} y={y:F3} p={pressure:F2} btn={button}");
 
-            switch (action)
+            switch (penAction)
             {
                 case "down":
-                    _injector.PenDown(x, y, pressure);
+                    _injector.PenDown(x, y, pressure, button);
                     break;
                 case "move":
                     _injector.PenMove(x, y, pressure);
                     break;
                 case "up":
                     _injector.PenUp();
-                    Log("Pen up");
                     break;
             }
         }

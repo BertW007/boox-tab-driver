@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:ui';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/pen_event.dart';
 import '../services/tablet_connection.dart';
@@ -24,6 +26,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _fadeTimer;
 
   bool _invertColors = false;
+  bool _fillScreen = false;
+  bool _softKbVisible = false;
+  final _softKbController = TextEditingController();
+  final _softKbFocus = FocusNode();
+  String _prevSoftKbText = '';
 
   @override
   void initState() {
@@ -45,11 +52,17 @@ class _HomeScreenState extends State<HomeScreen> {
     _ipController.dispose();
     _portController.dispose();
     _videoPortController.dispose();
+    _softKbController.dispose();
+    _softKbFocus.dispose();
     super.dispose();
   }
 
   void _onStateChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    if (_connection.isConnected) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    }
+    setState(() {});
   }
 
   Future<void> _connect() async {
@@ -71,9 +84,71 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _disconnect() {
     _connection.disconnect();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     setState(() {
       _completedStrokes.clear();
       _currentStroke.clear();
+    });
+  }
+
+  void _toggleSoftKb() {
+    setState(() => _softKbVisible = !_softKbVisible);
+    if (_softKbVisible) {
+      _softKbFocus.requestFocus();
+    } else {
+      _softKbFocus.unfocus();
+    }
+  }
+
+  void _sendKey(String char, String label, int logical) {
+    _connection.sendKey({'type': 'key', 'action': 'down', 'char': char, 'label': label, 'logical': logical});
+    _connection.sendKey({'type': 'key', 'action': 'up',   'char': char, 'label': label, 'logical': logical});
+  }
+
+  void _onSoftKbChanged(String value) {
+    if (!_connection.isConnected) return;
+    if (value.length > _prevSoftKbText.length) {
+      final newChars = value.substring(_prevSoftKbText.length);
+      for (final ch in newChars.characters) {
+        if (ch == '\n') {
+          _sendKey('', 'Enter', 0x100000000d);
+        } else {
+          _sendKey(ch, ch, ch.codeUnitAt(0));
+        }
+      }
+    } else if (value.length < _prevSoftKbText.length) {
+      final count = _prevSoftKbText.length - value.length;
+      for (var i = 0; i < count; i++) {
+        _sendKey('', 'Backspace', 0x100000008);
+      }
+    }
+    _prevSoftKbText = value;
+  }
+
+  void _handleKeyEvent(KeyEvent event) {
+    if (!_connection.isConnected) return;
+    final action = event is KeyUpEvent ? 'up' : 'down';
+    _connection.sendKey({
+      'type': 'key',
+      'action': action,
+      'char': event.character ?? '',
+      'label': event.logicalKey.keyLabel,
+      'logical': event.logicalKey.keyId,
+    });
+  }
+
+  void _handleScroll(PointerSignalEvent event, Size canvasSize) {
+    if (!_connection.isConnected) return;
+    if (event is! PointerScrollEvent) return;
+    final x = event.localPosition.dx;
+    final y = event.localPosition.dy;
+    final (normX, normY) = _mapToImageArea(x, y, canvasSize);
+    _connection.sendKey({
+      'type': 'scroll',
+      'x': normX,
+      'y': normY,
+      'dx': event.scrollDelta.dx,
+      'dy': event.scrollDelta.dy,
     });
   }
 
@@ -95,10 +170,22 @@ class _HomeScreenState extends State<HomeScreen> {
     final effectiveAction = (action == 'down' && !isContact) ? 'move' : action;
     final pressure = isContact ? rawPressure : 0.0;
 
+    // Determine button (eraser tip = right-click; mouse secondary/middle)
+    final String button;
+    if (tool == 'eraser') {
+      button = 'secondary';
+    } else if ((event.buttons & kSecondaryMouseButton) != 0) {
+      button = 'secondary';
+    } else if ((event.buttons & kMiddleMouseButton) != 0) {
+      button = 'middle';
+    } else {
+      button = 'primary';
+    }
+
     final x = event.localPosition.dx;
     final y = event.localPosition.dy;
 
-    // Map coordinates to the active image area (accounting for letterbox)
+    // Map coordinates to the active image area (accounting for letterbox / fill)
     final (normX, normY) = _mapToImageArea(x, y, canvasSize);
 
     _connection.send(PenEvent(
@@ -107,6 +194,7 @@ class _HomeScreenState extends State<HomeScreen> {
       pressure: pressure,
       action: effectiveAction,
       tool: tool,
+      button: button,
     ));
 
     setState(() {
@@ -124,10 +212,15 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  /// Maps canvas coordinates to normalised 0-1 within the displayed image area,
-  /// compensating for letterbox bars (BoxFit.contain with different aspect ratios).
   (double, double) _mapToImageArea(double x, double y, Size canvas) {
     if (canvas.isEmpty) return (0, 0);
+
+    if (_fillScreen) {
+      return ((x / canvas.width).clamp(0.0, 1.0),
+              (y / canvas.height).clamp(0.0, 1.0));
+    }
+
+    // BoxFit.contain — compensate for letterbox bars
     final pcW = _connection.pcScreenWidth.toDouble();
     final pcH = _connection.pcScreenHeight.toDouble();
     final pcAspect = pcW / pcH;
@@ -135,22 +228,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
     double imgW, imgH, xOff, yOff;
     if (pcAspect > canvasAspect) {
-      // PC wider → image fills canvas width, bars at top/bottom
       imgW = canvas.width;
       imgH = canvas.width / pcAspect;
       xOff = 0;
       yOff = (canvas.height - imgH) / 2;
     } else {
-      // PC narrower → image fills canvas height, bars at left/right
       imgH = canvas.height;
       imgW = canvas.height * pcAspect;
       xOff = (canvas.width - imgW) / 2;
       yOff = 0;
     }
 
-    final nx = ((x - xOff) / imgW).clamp(0.0, 1.0);
-    final ny = ((y - yOff) / imgH).clamp(0.0, 1.0);
-    return (nx, ny);
+    return (((x - xOff) / imgW).clamp(0.0, 1.0),
+            ((y - yOff) / imgH).clamp(0.0, 1.0));
   }
 
   void _showSnackBar(String msg) {
@@ -180,6 +270,76 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _barBtn({
+    required String label,
+    required bool active,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: active ? Colors.white24 : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: Colors.white30, width: 1),
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 16, color: Colors.white),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTransportSelector() {
+    const options = [
+      (TransportType.wifi,      'WiFi'),
+      (TransportType.usb,       'USB'),
+      (TransportType.bluetooth, 'Bluetooth'),
+    ];
+    return Row(
+      children: options.map((opt) {
+        final (type, label) = opt;
+        final selected = _connection.transportType == type;
+        return Expanded(
+          child: GestureDetector(
+            onTap: () => _connection.setTransport(type),
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                color: selected
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: selected
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.outline,
+                  width: 2,
+                ),
+              ),
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: selected ? Colors.white : Theme.of(context).colorScheme.onSurface,
+                ),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
   Widget _buildConnectionPanel() {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -192,44 +352,16 @@ class _HomeScreenState extends State<HomeScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                Icon(Icons.tablet_mac,
-                    size: 28, color: Theme.of(context).colorScheme.primary),
-                const SizedBox(width: 12),
-                Text(
-                  'Boox Tablet Driver',
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleLarge
-                      ?.copyWith(fontWeight: FontWeight.bold),
-                ),
-              ],
+            Text(
+              '📱 Boox Tablet Driver',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleLarge
+                  ?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 20),
 
-            SegmentedButton<TransportType>(
-              segments: const [
-                ButtonSegment(
-                  value: TransportType.wifi,
-                  label: Text('WiFi'),
-                  icon: Icon(Icons.wifi),
-                ),
-                ButtonSegment(
-                  value: TransportType.usb,
-                  label: Text('USB'),
-                  icon: Icon(Icons.usb),
-                ),
-                ButtonSegment(
-                  value: TransportType.bluetooth,
-                  label: Text('BT'),
-                  icon: Icon(Icons.bluetooth),
-                ),
-              ],
-              selected: {_connection.transportType},
-              onSelectionChanged: (sel) =>
-                  _connection.setTransport(sel.first),
-            ),
+            _buildTransportSelector(),
             const SizedBox(height: 16),
 
             if (_connection.transportType == TransportType.wifi) ...[
@@ -238,7 +370,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 decoration: const InputDecoration(
                   labelText: 'PC IP Address',
                   hintText: 'e.g. 192.168.0.22',
-                  prefixIcon: Icon(Icons.computer),
                   border: OutlineInputBorder(),
                 ),
                 keyboardType: TextInputType.number,
@@ -299,7 +430,6 @@ class _HomeScreenState extends State<HomeScreen> {
               controller: _portController,
               decoration: const InputDecoration(
                 labelText: 'Control port',
-                prefixIcon: Icon(Icons.settings_ethernet),
                 border: OutlineInputBorder(),
               ),
               keyboardType: TextInputType.number,
@@ -309,32 +439,26 @@ class _HomeScreenState extends State<HomeScreen> {
               controller: _videoPortController,
               decoration: const InputDecoration(
                 labelText: 'Video port',
-                prefixIcon: Icon(Icons.monitor),
                 border: OutlineInputBorder(),
               ),
               keyboardType: TextInputType.number,
             ),
             const SizedBox(height: 16),
 
-            FilledButton.icon(
+            FilledButton(
               onPressed: _connection.state == ConnState.connecting
                   ? null
                   : _connect,
-              icon: _connection.state == ConnState.connecting
+              style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16)),
+              child: _connection.state == ConnState.connecting
                   ? const SizedBox(
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white),
                     )
-                  : const Icon(Icons.link),
-              label: Text(
-                _connection.state == ConnState.connecting
-                    ? 'Connecting...'
-                    : 'Connect to PC',
-              ),
-              style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16)),
+                  : const Text('🔗 Connect to PC'),
             ),
 
             if (_connection.state == ConnState.error) ...[
@@ -375,28 +499,32 @@ class _HomeScreenState extends State<HomeScreen> {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          // Invert colors toggle
-          IconButton(
-            onPressed: () => setState(() => _invertColors = !_invertColors),
-            icon: Icon(
-              _invertColors ? Icons.invert_colors : Icons.invert_colors_off,
-              color: _invertColors ? Colors.yellowAccent : Colors.white54,
-            ),
-            tooltip: 'Inwersja kolorów',
-            iconSize: 24,
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            constraints: const BoxConstraints(),
+          _barBtn(
+            label: '◐',
+            active: _invertColors,
+            tooltip: 'Inwersja',
+            onTap: () => setState(() => _invertColors = !_invertColors),
           ),
-          const SizedBox(width: 4),
-          ElevatedButton.icon(
+          _barBtn(
+            label: '⊞',
+            active: _fillScreen,
+            tooltip: 'Wypełnij ekran',
+            onTap: () => setState(() => _fillScreen = !_fillScreen),
+          ),
+          _barBtn(
+            label: '⌨',
+            active: _softKbVisible,
+            tooltip: 'Klawiatura ekranowa',
+            onTap: _toggleSoftKb,
+          ),
+          ElevatedButton(
             onPressed: _disconnect,
-            icon: const Icon(Icons.link_off, size: 18),
-            label: const Text('Rozłącz'),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red.shade700,
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             ),
+            child: const Text('✕ Rozłącz'),
           ),
         ],
       ),
@@ -430,48 +558,69 @@ class _HomeScreenState extends State<HomeScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final canvasSize = constraints.biggest;
-        return Listener(
-          onPointerDown: (e) => _handlePointerEvent('down', e, canvasSize),
-          onPointerMove: (e) => _handlePointerEvent('move', e, canvasSize),
-          onPointerUp: (e) => _handlePointerEvent('up', e, canvasSize),
-          onPointerCancel: (e) => _handlePointerEvent('up', e, canvasSize),
-          onPointerHover: (e) => _handlePointerEvent('move', e, canvasSize),
-          child: Stack(
-            children: [
-              if (_connection.latestFrame != null)
-                Positioned.fill(
-                  child: RepaintBoundary(
-                    child: _maybeInvert(
-                      Image.memory(
-                        _connection.latestFrame!,
-                        fit: BoxFit.contain,
-                        width: double.infinity,
-                        height: double.infinity,
-                        gaplessPlayback: true,
+        return Focus(
+          autofocus: true,
+          onKeyEvent: (_, event) {
+            _handleKeyEvent(event);
+            return KeyEventResult.handled;
+          },
+          child: Listener(
+            onPointerDown: (e) => _handlePointerEvent('down', e, canvasSize),
+            onPointerMove: (e) => _handlePointerEvent('move', e, canvasSize),
+            onPointerUp: (e) => _handlePointerEvent('up', e, canvasSize),
+            onPointerCancel: (e) => _handlePointerEvent('up', e, canvasSize),
+            onPointerHover: (e) => _handlePointerEvent('move', e, canvasSize),
+            onPointerSignal: (e) => _handleScroll(e, canvasSize),
+            child: _maybeInvert(
+              Stack(
+                children: [
+                  if (_connection.latestFrame != null)
+                    Positioned.fill(
+                      child: RepaintBoundary(
+                        child: Image.memory(
+                          _connection.latestFrame!,
+                          fit: _fillScreen ? BoxFit.fill : BoxFit.contain,
+                          width: double.infinity,
+                          height: double.infinity,
+                          gaplessPlayback: true,
+                        ),
+                      ),
+                    )
+                  else
+                    Container(color: const Color(0xFFF5F5F5)),
+
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: CustomPaint(painter: _GridPainter()),
+                    ),
+                  ),
+
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: CustomPaint(
+                        painter: _StrokePainter(
+                          completedStrokes: _completedStrokes,
+                          currentStroke: _currentStroke,
+                        ),
                       ),
                     ),
                   ),
-                )
-              else
-                Container(color: const Color(0xFFF5F5F5)),
 
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: CustomPaint(painter: _GridPainter()),
-                ),
-              ),
-
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: CustomPaint(
-                    painter: _StrokePainter(
-                      completedStrokes: _completedStrokes,
-                      currentStroke: _currentStroke,
+                  // Hidden TextField for soft keyboard input
+                  Positioned(
+                    left: -200, top: -200, width: 1, height: 1,
+                    child: TextField(
+                      controller: _softKbController,
+                      focusNode: _softKbFocus,
+                      onChanged: _onSoftKbChanged,
+                      onSubmitted: (_) => _sendKey('', 'Enter', 0x100000000d),
+                      keyboardType: TextInputType.multiline,
+                      maxLines: null,
                     ),
                   ),
-                ),
+                ],
               ),
-            ],
+            ),
           ),
         );
       },

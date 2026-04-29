@@ -214,6 +214,16 @@ class TabletConnection extends ChangeNotifier {
     }
   }
 
+  // ── Send key event ───────────────────────────────────────────────────
+  void sendKey(Map<String, dynamic> event) {
+    if (!isConnected) return;
+    try {
+      _ctrlSocket!.write('${jsonEncode(event)}\n');
+    } catch (e) {
+      debugPrint('SendKey error: $e');
+    }
+  }
+
   // ── Disconnect ──────────────────────────────────────────────────────
   void disconnect() {
     _videoSubscription?.cancel();

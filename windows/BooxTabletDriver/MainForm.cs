@@ -15,6 +15,7 @@ sealed class MainForm : Form
     private readonly NumericUpDown _portInput = new() { Minimum = 1024, Maximum = 65535, Value = 52017 };
     private readonly NumericUpDown _videoPortInput = new() { Minimum = 1024, Maximum = 65535, Value = 52018 };
     private readonly Button _startStopBtn = new() { Text = "Start", Width = 120, Height = 36 };
+    private readonly Button _adbWifiBtn = new() { Text = "ADB WiFi ON", Width = 110, Height = 36 };
     private readonly Label _statusLabel = new() { AutoSize = true };
     private readonly Label _clientLabel = new() { AutoSize = true };
     private readonly Label _backendLabel = new() { AutoSize = true };
@@ -82,6 +83,7 @@ sealed class MainForm : Form
         portPanel.Controls.Add(new Label { Text = "Video port:", TextAlign = ContentAlignment.MiddleLeft, AutoSize = true });
         portPanel.Controls.Add(_videoPortInput);
         portPanel.Controls.Add(_startStopBtn);
+        portPanel.Controls.Add(_adbWifiBtn);
         table.Controls.Add(portPanel, 1, 1);
 
         // Row 2: screen mirroring options
@@ -152,6 +154,8 @@ sealed class MainForm : Form
 
         _portInput.ValueChanged += (_, _) => UpdateServerPort();
         _videoPortInput.ValueChanged += (_, _) => UpdateVideoPort();
+
+        _adbWifiBtn.Click += (_, _) => EnableAdbWifi();
 
         _server.OnStarted += () => this.Invoke(() => _server_OnStarted());
         _server.OnStopped += () => this.Invoke(() => _server_OnStopped());
@@ -241,6 +245,19 @@ sealed class MainForm : Form
             await Task.Delay(800);
             RunAdbReverse((int)_portInput.Value, (int)_videoPortInput.Value);
         }
+    }
+
+    private void EnableAdbWifi()
+    {
+        AppendLog("Włączam ADB przez WiFi (port 5555)...");
+        var result = RunWithOutput("adb", "tcpip 5555");
+        AppendLog($"adb tcpip 5555: {(string.IsNullOrWhiteSpace(result) ? "OK" : result)}");
+
+        // Show device IP so user knows what to type in Boox app
+        var ip = RunWithOutput("adb", "shell ip route");
+        var match = System.Text.RegularExpressions.Regex.Match(ip, @"src (\d+\.\d+\.\d+\.\d+)");
+        if (match.Success)
+            AppendLog($"IP tabletu: {match.Groups[1].Value}  (wpisz to w aplikacji Boox)");
     }
 
     private void UpdateServerPort()
