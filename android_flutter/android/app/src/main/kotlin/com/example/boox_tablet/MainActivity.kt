@@ -1,11 +1,16 @@
 package com.example.boox_tablet
 
+import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothSocket
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.InputDevice
 import android.view.KeyEvent
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -18,12 +23,14 @@ import java.util.UUID
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.example.boox_tablet/input"
     private val BT_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+    private val REQ_BT = 1001
 
     private var btSocket: BluetoothSocket? = null
     private var btLocalServer: ServerSocket? = null
-
-    // Keep reference to send "physicalEsc" / "physicalTab" back to Flutter
     private var methodChannel: MethodChannel? = null
+
+    // Pending MethodChannel result waiting for runtime permission grant
+    private var pendingBtResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -34,18 +41,11 @@ class MainActivity : FlutterActivity() {
                 "hasPhysicalKeyboard" -> result.success(hasPhysicalKeyboard())
 
                 "getPairedBluetoothDevices" -> {
-                    try {
-                        val adapter = BluetoothAdapter.getDefaultAdapter()
-                        if (adapter == null) {
-                            result.error("NO_BT", "No Bluetooth adapter", null)
-                            return@setMethodCallHandler
-                        }
-                        val devices = adapter.bondedDevices.map { device ->
-                            mapOf("name" to device.name, "address" to device.address)
-                        }
-                        result.success(devices)
-                    } catch (e: SecurityException) {
-                        result.error("PERMISSION", "Bluetooth permission denied", null)
+                    if (!hasBtPermission()) {
+                        pendingBtResult = result
+                        requestBtPermissions()
+                    } else {
+                        result.success(pairedDevices())
                     }
                 }
 
@@ -76,10 +76,47 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // ── Runtime Bluetooth permissions (Android 12+) ────────────────────────
+
+    private fun hasBtPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) ==
+                PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestBtPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN),
+                REQ_BT
+            )
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_BT) {
+            val r = pendingBtResult ?: return
+            pendingBtResult = null
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                r.success(pairedDevices())
+            } else {
+                r.error("PERMISSION", "Bluetooth permission denied by user", null)
+            }
+        }
+    }
+
+    private fun pairedDevices(): List<Map<String, String>> {
+        val adapter = BluetoothAdapter.getDefaultAdapter() ?: return emptyList()
+        return adapter.bondedDevices.map { mapOf("name" to it.name, "address" to it.address) }
+    }
+
     // ── Key interception ───────────────────────────────────────────────────
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // Call super first so Flutter always receives the raw event.
         val result = super.dispatchKeyEvent(event)
         // Prevent Android from consuming Tab (focus traversal) and
         // Escape (back navigation) after Flutter has already seen them.
@@ -91,9 +128,8 @@ class MainActivity : FlutterActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        // KEYCODE_BACK (and sometimes KEYCODE_ESCAPE on some BOOX firmwares)
-        // triggers onBackPressed instead of appearing as a keyboard event.
-        // Forward it to Flutter as a synthetic ESC so the app can send it to PC.
+        // KEYCODE_BACK (or KEYCODE_ESCAPE on some BOOX firmwares) triggers
+        // onBackPressed instead of a keyboard event — forward to Flutter as ESC.
         val ch = methodChannel
         if (ch != null) {
             ch.invokeMethod("physicalEsc", null)
@@ -127,22 +163,16 @@ class MainActivity : FlutterActivity() {
                 val tcpIn: InputStream = tcpClient.getInputStream()
                 val tcpOut: OutputStream = tcpClient.getOutputStream()
 
-                val fwdBtToTcp = Thread {
-                    try { btIn.copyTo(tcpOut) } catch (_: Exception) {}
-                }
-                val fwdTcpToBt = Thread {
-                    try { tcpIn.copyTo(btOut) } catch (_: Exception) {}
-                }
-                fwdBtToTcp.start()
-                fwdTcpToBt.start()
-                fwdBtToTcp.join()
-                fwdTcpToBt.join()
+                val fwdBtToTcp = Thread { try { btIn.copyTo(tcpOut)  } catch (_: Exception) {} }
+                val fwdTcpToBt = Thread { try { tcpIn.copyTo(btOut)  } catch (_: Exception) {} }
+                fwdBtToTcp.start(); fwdTcpToBt.start()
+                fwdBtToTcp.join();  fwdTcpToBt.join()
             } catch (_: Exception) {}
         }.start()
     }
 
     private fun stopBluetoothBridge() {
-        try { btSocket?.close() } catch (_: Exception) {}
+        try { btSocket?.close()      } catch (_: Exception) {}
         try { btLocalServer?.close() } catch (_: Exception) {}
         btSocket = null
         btLocalServer = null
