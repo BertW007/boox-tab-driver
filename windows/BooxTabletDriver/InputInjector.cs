@@ -339,6 +339,7 @@ sealed class InputInjector : IDisposable
         {
             case "esc":        Tap(0x1B);                break;  // Escape
             case "snip":       Combo(0xA0, 0x5B, 0x53); break;  // Shift+Win+S
+            case "printscreen":Tap(0x2C);                break;  // PrintScreen
             case "copy":       Combo(0xA2, 0x43);        break;  // Ctrl+C
             case "paste":      Combo(0xA2, 0x56);        break;  // Ctrl+V
             case "tab":        Tap(0x09);                break;  // Tab

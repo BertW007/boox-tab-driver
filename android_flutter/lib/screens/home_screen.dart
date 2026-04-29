@@ -34,6 +34,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String _prevSoftKbText = '';
 
   bool _videoEnabled = true;
+  bool _touchLocked = false;
   Offset? _hoverPos;
   String _tabletIp = '';
 
@@ -248,6 +249,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _handlePointerEvent(String action, PointerEvent event, Size canvasSize) {
     if (!_connection.isConnected) return;
+    if (_touchLocked && event.kind == PointerDeviceKind.touch) return;
 
     final tool = switch (event.kind) {
       PointerDeviceKind.stylus => 'stylus',
@@ -637,6 +639,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     const shortcuts = [
       ('Esc',    'esc',      'Escape'),
+      ('PrtSc',  'printscreen', 'PrintScreen'),
       ('Snip',   'snip',     'Zrzut ekranu (Shift+Win+S)'),
       ('Ctrl+C', 'copy',     'Kopiuj'),
       ('Ctrl+V', 'paste',    'Wklej'),
@@ -678,6 +681,8 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () => setState(() => _invertColors = !_invertColors)),
           _barBtn(label: '⊞', active: _fillScreen, tooltip: 'Wypełnij ekran',
               onTap: () => setState(() => _fillScreen = !_fillScreen)),
+          _barBtn(label: '🤚', active: _touchLocked, tooltip: _touchLocked ? 'Odblokuj dotyk' : 'Zablokuj dotyk (tylko rysik)',
+              onTap: () => setState(() => _touchLocked = !_touchLocked)),
           _barBtn(
             label: '🖥',
             active: _connection.isVideoConnected,
