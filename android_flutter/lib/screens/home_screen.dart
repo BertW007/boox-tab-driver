@@ -28,9 +28,17 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _invertColors = false;
   bool _fillScreen = false;
   bool _softKbVisible = false;
+  bool _physicalKbConnected = false;
   final _softKbController = TextEditingController();
   final _softKbFocus = FocusNode();
   String _prevSoftKbText = '';
+
+  // Bluetooth device selection
+  List<Map<String, String>> _btDevices = [];
+  String? _selectedBtAddress;
+  String _selectedBtName = '';
+
+  static const _inputChannel = MethodChannel('com.example.boox_tablet/input');
 
   @override
   void initState() {
@@ -42,6 +50,24 @@ class _HomeScreenState extends State<HomeScreen> {
         _completedStrokes.removeWhere((s) => s.isDead);
       });
     });
+    _checkPhysicalKeyboard();
+
+    // Handle ESC/back button forwarded from Kotlin (Android intercepts before Flutter)
+    _inputChannel.setMethodCallHandler((call) async {
+      if (call.method == 'physicalEsc' && _connection.isConnected) {
+        _connection.sendKey({'type': 'key', 'action': 'down', 'char': '', 'label': 'Escape', 'logical': 0x10000001b});
+        _connection.sendKey({'type': 'key', 'action': 'up',   'char': '', 'label': 'Escape', 'logical': 0x10000001b});
+      }
+    });
+  }
+
+  Future<void> _checkPhysicalKeyboard() async {
+    try {
+      final result = await _inputChannel.invokeMethod<bool>('hasPhysicalKeyboard');
+      if (mounted) setState(() => _physicalKbConnected = result ?? false);
+    } catch (_) {
+      _physicalKbConnected = false;
+    }
   }
 
   @override
@@ -61,6 +87,14 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     if (_connection.isConnected) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      _checkPhysicalKeyboard().then((_) {
+        if (!_physicalKbConnected && mounted) {
+          setState(() => _softKbVisible = true);
+          _softKbFocus.requestFocus();
+        }
+      });
+    } else {
+      setState(() => _softKbVisible = false);
     }
     setState(() {});
   }
@@ -79,7 +113,33 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    if (_connection.transportType == TransportType.bluetooth) {
+      if (_selectedBtAddress == null) {
+        _showSnackBar('Select a paired Bluetooth device first');
+        return;
+      }
+      _connection.setBtDevice(_selectedBtAddress!);
+    }
+
     await _connection.connect();
+  }
+
+  Future<void> _loadBtDevices() async {
+    try {
+      final result = await _inputChannel.invokeMethod<List>('getPairedBluetoothDevices');
+      if (!mounted) return;
+      setState(() {
+        _btDevices = (result ?? [])
+            .cast<Map>()
+            .map((m) => {'name': m['name'] as String, 'address': m['address'] as String})
+            .toList();
+      });
+      if (_btDevices.isEmpty) {
+        _showSnackBar('No paired Bluetooth devices found. Pair with your PC first.');
+      }
+    } catch (e) {
+      _showSnackBar('Bluetooth error: $e');
+    }
   }
 
   void _disconnect() {
@@ -416,11 +476,53 @@ class _HomeScreenState extends State<HomeScreen> {
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.blue.shade200),
                 ),
-                child: Text(
-                  'Bluetooth requires a paired device.\n'
-                  'Pair your Boox with the Windows PC first.',
-                  style: TextStyle(
-                      fontSize: 13, color: Colors.blue.shade900, height: 1.5),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Bluetooth — paruj tablet z PC wcześniej.',
+                      style: TextStyle(
+                          fontSize: 13, color: Colors.blue.shade900, height: 1.5),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: _loadBtDevices,
+                      icon: const Icon(Icons.bluetooth_searching, size: 18),
+                      label: const Text('Wyszukaj sparowane urządzenia'),
+                    ),
+                    if (_btDevices.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      DropdownButton<String>(
+                        isExpanded: true,
+                        value: _selectedBtAddress,
+                        hint: const Text('Wybierz urządzenie'),
+                        items: _btDevices.map((d) {
+                          return DropdownMenuItem<String>(
+                            value: d['address'],
+                            child: Text('${d['name']}  (${d['address']})'),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val == null) return;
+                          setState(() {
+                            _selectedBtAddress = val;
+                            _selectedBtName = _btDevices
+                                .firstWhere((d) => d['address'] == val)['name']!;
+                          });
+                        },
+                      ),
+                    ],
+                    if (_selectedBtAddress != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          'Wybrano: $_selectedBtName',
+                          style: TextStyle(
+                              color: Colors.blue.shade800,
+                              fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                  ],
                 ),
               ),
               const SizedBox(height: 12),
@@ -482,49 +584,81 @@ class _HomeScreenState extends State<HomeScreen> {
       TransportType.bluetooth => 'BT',
     };
 
+    const shortcuts = [
+      ('Esc',    'esc',      'Escape'),
+      ('Snip',   'snip',     'Zrzut ekranu (Shift+Win+S)'),
+      ('Ctrl+C', 'copy',     'Kopiuj'),
+      ('Ctrl+V', 'paste',    'Wklej'),
+      ('Tab',    'tab',      'Tab'),
+      ('Zadania','taskview', 'Widok zadań (Win+Tab)'),
+      ('Alt+Tab','alttab',  'Przełącz okno'),
+    ];
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       color: const Color(0xFF1B5E20),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
       child: Row(
         children: [
-          const SizedBox(
-            width: 8, height: 8,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.greenAccent),
+          // Shortcut buttons
+          ...shortcuts.map((s) {
+            final (lbl, name, tooltip) = s;
+            return Tooltip(
+              message: tooltip,
+              child: GestureDetector(
+                onTap: () => _connection.sendShortcut(name),
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 2),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: Colors.white12,
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                  child: Text(lbl,
+                    style: const TextStyle(color: Colors.white, fontSize: 12,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            );
+          }),
+          const SizedBox(width: 6),
+          // Toggles
+          _barBtn(label: '◐', active: _invertColors, tooltip: 'Inwersja',
+              onTap: () => setState(() => _invertColors = !_invertColors)),
+          _barBtn(label: '⊞', active: _fillScreen, tooltip: 'Wypełnij ekran',
+              onTap: () => setState(() => _fillScreen = !_fillScreen)),
+          if (!_physicalKbConnected)
+            _barBtn(label: '⌨', active: _softKbVisible, tooltip: 'Klawiatura ekranowa',
+                onTap: _toggleSoftKb),
+          const Spacer(),
+          // Connection status
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                '$label${_connection.isVideoConnected ? ' 🖥' : ''}',
+                style: const TextStyle(color: Colors.white70, fontSize: 11),
+              ),
+              if (_connection.connectedPcName.isNotEmpty)
+                Text(
+                  _connection.connectedPcName,
+                  style: const TextStyle(color: Colors.white54, fontSize: 10),
+                ),
+            ],
           ),
           const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Połączono ($label)${_connection.isVideoConnected ? ' 🖥' : ''}',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          _barBtn(
-            label: '◐',
-            active: _invertColors,
-            tooltip: 'Inwersja',
-            onTap: () => setState(() => _invertColors = !_invertColors),
-          ),
-          _barBtn(
-            label: '⊞',
-            active: _fillScreen,
-            tooltip: 'Wypełnij ekran',
-            onTap: () => setState(() => _fillScreen = !_fillScreen),
-          ),
-          _barBtn(
-            label: '⌨',
-            active: _softKbVisible,
-            tooltip: 'Klawiatura ekranowa',
-            onTap: _toggleSoftKb,
-          ),
+          // Disconnect
           ElevatedButton(
             onPressed: _disconnect,
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red.shade700,
               foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            child: const Text('✕ Rozłącz'),
+            child: const Text('✕', style: TextStyle(fontSize: 14)),
           ),
         ],
       ),
@@ -538,17 +672,38 @@ class _HomeScreenState extends State<HomeScreen> {
       TransportType.bluetooth => 'Connect over Bluetooth',
     };
 
+    final isReconnecting = _connection.isReconnecting;
+    final reconnectStatus = _connection.reconnectStatus;
+
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.touch_app, size: 80, color: Colors.grey[300]),
-          const SizedBox(height: 16),
-          Text(
-            '$modeHint to start using\nyour Boox as a graphics tablet',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 16, color: Colors.grey[500], height: 1.4),
-          ),
+          if (isReconnecting) ...[
+            const SizedBox(
+              width: 48, height: 48,
+              child: CircularProgressIndicator(strokeWidth: 3),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              reconnectStatus,
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 15, color: Colors.orange[700]),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: _disconnect,
+              child: const Text('Anuluj'),
+            ),
+          ] else ...[
+            Icon(Icons.touch_app, size: 80, color: Colors.grey[300]),
+            const SizedBox(height: 16),
+            Text(
+              '$modeHint to start using\nyour Boox as a graphics tablet',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 16, color: Colors.grey[500], height: 1.4),
+            ),
+          ],
         ],
       ),
     );

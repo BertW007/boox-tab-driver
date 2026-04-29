@@ -9,6 +9,7 @@ sealed class MainForm : Form
 {
     private readonly InputInjector _injector = new();
     private readonly TabletServer _server;
+    private readonly BluetoothServer _btServer;
     private readonly ScreenStreamer _screenStreamer;
 
     // Controls
@@ -37,6 +38,7 @@ sealed class MainForm : Form
         StartPosition = FormStartPosition.CenterScreen;
 
         _server = new TabletServer((int)_portInput.Value, _injector);
+        _btServer = new BluetoothServer(_injector);
         _screenStreamer = new ScreenStreamer((int)_videoPortInput.Value);
 
         _injector.Initialize();
@@ -159,9 +161,15 @@ sealed class MainForm : Form
 
         _server.OnStarted += () => this.Invoke(() => _server_OnStarted());
         _server.OnStopped += () => this.Invoke(() => _server_OnStopped());
-        _server.OnClientConnected += () => this.Invoke(() => _server_OnClientConnected());
+        _server.OnClientConnected += (ep) => this.Invoke(() => _server_OnClientConnected(ep));
         _server.OnClientDisconnected += () => this.Invoke(() => _server_OnClientDisconnected());
         _server.OnLog += (msg) => this.Invoke(() => AppendLog(msg));
+
+        _btServer.OnStarted += () => this.Invoke(() => _server_OnStarted());
+        _btServer.OnStopped += () => this.Invoke(() => _server_OnStopped());
+        _btServer.OnClientConnected += (name) => this.Invoke(() => _server_OnClientConnected($"BT: {name}"));
+        _btServer.OnClientDisconnected += () => this.Invoke(() => _server_OnClientDisconnected_Bt());
+        _btServer.OnLog += (msg) => this.Invoke(() => AppendLog(msg));
 
         _screenStreamer.OnStarted += () => this.Invoke(() =>
             _videoLabel.Text = "Streaming");
@@ -177,6 +185,12 @@ sealed class MainForm : Form
 
         var controlPort = (int)_portInput.Value;
         var videoPort = (int)_videoPortInput.Value;
+
+        if (_modeSelector.SelectedIndex == 2) // Bluetooth
+        {
+            _btServer.Start();
+            return;
+        }
 
         if (IsAdmin())
             EnsureFirewallRules(controlPort, videoPort);
@@ -197,6 +211,7 @@ sealed class MainForm : Form
     {
         _screenStreamer.Stop();
         _server.Stop();
+        _btServer.Stop();
     }
 
     private void _server_OnStarted()
@@ -225,11 +240,10 @@ sealed class MainForm : Form
         UpdateStatus("Stopped", Color.Gray);
     }
 
-    private void _server_OnClientConnected()
+    private void _server_OnClientConnected(string info)
     {
-        _clientLabel.Text = "Connected";
+        _clientLabel.Text = $"Connected: {info}";
         _clientLabel.ForeColor = Color.Green;
-        // Minimize so injected mouse clicks don't hit this window
         WindowState = FormWindowState.Minimized;
     }
 
@@ -239,12 +253,18 @@ sealed class MainForm : Form
         _clientLabel.ForeColor = Color.Gray;
         WindowState = FormWindowState.Normal;
 
-        // USB: re-run adb reverse so device can reconnect without cable replug
         if (_modeSelector.SelectedIndex == 1 && _server.IsRunning)
         {
-            await Task.Delay(800);
+            await Task.Delay(2000);
             RunAdbReverse((int)_portInput.Value, (int)_videoPortInput.Value);
         }
+    }
+
+    private void _server_OnClientDisconnected_Bt()
+    {
+        _clientLabel.Text = "Disconnected";
+        _clientLabel.ForeColor = Color.Gray;
+        WindowState = FormWindowState.Normal;
     }
 
     private void EnableAdbWifi()
@@ -362,6 +382,7 @@ sealed class MainForm : Form
     {
         _screenStreamer.Dispose();
         _server.Dispose();
+        _btServer.Dispose();
         _injector.Dispose();
         base.OnFormClosing(e);
     }

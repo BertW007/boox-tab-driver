@@ -22,7 +22,7 @@ sealed class TabletServer : IDisposable
     // Events for UI updates
     public event Action? OnStarted;
     public event Action? OnStopped;
-    public event Action? OnClientConnected;
+    public event Action<string>? OnClientConnected;  // passes "IP:port" of client
     public event Action? OnClientDisconnected;
     public event Action<string>? OnLog;
 
@@ -83,14 +83,16 @@ sealed class TabletServer : IDisposable
                 _client = client;
                 _stream = client.GetStream();
 
-                Log($"Device connected from {client.Client.RemoteEndPoint}");
-                OnClientConnected?.Invoke();
+                var endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
+                Log($"Device connected from {endpoint}");
+                OnClientConnected?.Invoke(endpoint);
 
-                // Tell the device the PC screen resolution for letterbox compensation
+                // Tell the device the PC screen resolution + hostname
                 try
                 {
                     var b = Screen.PrimaryScreen!.Bounds;
-                    var msg = $"{{\"type\":\"screen_info\",\"width\":{b.Width},\"height\":{b.Height}}}\n";
+                    var hostname = Dns.GetHostName();
+                    var msg = $"{{\"type\":\"screen_info\",\"hostname\":\"{hostname}\",\"width\":{b.Width},\"height\":{b.Height}}}\n";
                     await _stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(msg));
                 }
                 catch { }
@@ -138,67 +140,8 @@ sealed class TabletServer : IDisposable
         catch (OperationCanceledException) { }
     }
 
-    private void ProcessMessage(string json)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            var type = root.GetProperty("type").GetString();
-
-            if (type == "key")
-            {
-                var action = root.GetProperty("action").GetString() ?? "down";
-                var ch    = root.TryGetProperty("char",    out var cProp) ? cProp.GetString() ?? "" : "";
-                var label = root.TryGetProperty("label",   out var lProp) ? lProp.GetString() ?? "" : "";
-                _injector.InjectKey(action, ch, label);
-                return;
-            }
-
-            if (type == "scroll")
-            {
-                var sx = root.TryGetProperty("x",  out var sxP) ? sxP.GetSingle() : 0f;
-                var sy = root.TryGetProperty("y",  out var syP) ? syP.GetSingle() : 0f;
-                var dx = root.TryGetProperty("dx", out var dxP) ? dxP.GetSingle() : 0f;
-                var dy = root.TryGetProperty("dy", out var dyP) ? dyP.GetSingle() : 0f;
-                _injector.InjectScroll(sx, sy, dx, dy);
-                return;
-            }
-
-            if (type != "pen") return;
-
-            var penAction = root.GetProperty("action").GetString() ?? "move";
-            var x = root.GetProperty("x").GetSingle();
-            var y = root.GetProperty("y").GetSingle();
-            var pressure = root.GetProperty("pressure").GetSingle();
-            var button = root.TryGetProperty("button", out var btnProp) ? btnProp.GetString() ?? "primary" : "primary";
-
-            if (penAction == "down")
-                Log($"Pen down x={x:F3} y={y:F3} p={pressure:F2} btn={button}");
-
-            switch (penAction)
-            {
-                case "down":
-                    _injector.PenDown(x, y, pressure, button);
-                    break;
-                case "move":
-                    _injector.PenMove(x, y, pressure);
-                    break;
-                case "up":
-                    _injector.PenUp();
-                    break;
-            }
-        }
-        catch (JsonException ex)
-        {
-            Log($"JSON parse error: {ex.Message}");
-        }
-        catch (Exception ex)
-        {
-            Log($"Process error: {ex.Message}");
-        }
-    }
+    private void ProcessMessage(string json) =>
+        ProtocolHandler.Process(json, _injector, Log);
 
     private void Log(string msg)
     {

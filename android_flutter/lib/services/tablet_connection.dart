@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import '../models/pen_event.dart';
 
@@ -14,12 +15,15 @@ enum ConnState { disconnected, connecting, connected, error }
 /// 1. Control channel: sends pen events (JSON)
 /// 2. Video channel: receives screen frames (JPEG)
 class TabletConnection extends ChangeNotifier {
+  static const _channel = MethodChannel('com.example.boox_tablet/input');
+
   // ── Transport config ────────────────────────────────────────────────
   TransportType _transportType = TransportType.wifi;
   String _host = '192.168.1.100';
   int _controlPort = 52017;
   int _videoPort = 52018;
   String _errorMessage = '';
+  String _btDeviceAddress = '';
 
   // ── Control socket ──────────────────────────────────────────────────
   Socket? _ctrlSocket;
@@ -36,12 +40,22 @@ class TabletConnection extends ChangeNotifier {
   // ── Frame data ──────────────────────────────────────────────────────
   Uint8List? _latestFrame;
   int _frameCount = 0;
-  final List<int> _frameSizes = [];
 
-  // ── PC screen info ──────────────────────────────────────────────────
+  // ── PC screen / connection info ─────────────────────────────────────
   int _pcScreenWidth = 1920;
   int _pcScreenHeight = 1080;
+  String _connectedPcName = '';
   String _ctrlBuffer = '';
+
+  // ── Auto-reconnect ──────────────────────────────────────────────────
+  bool _intentionalDisconnect = false;
+  bool _autoReconnect = true;
+  int _reconnectAttempt = 0;
+  static const _maxReconnectAttempts = 8;
+  // Progressive delays: 2s, 3s, 5s, 8s, 12s, 18s, 25s, 35s
+  static const _reconnectDelays = [2, 3, 5, 8, 12, 18, 25, 35];
+  Timer? _reconnectTimer;
+  String _reconnectStatus = '';
 
   // ── Getters ─────────────────────────────────────────────────────────
   TransportType get transportType => _transportType;
@@ -56,6 +70,9 @@ class TabletConnection extends ChangeNotifier {
   int get frameCount => _frameCount;
   int get pcScreenWidth => _pcScreenWidth;
   int get pcScreenHeight => _pcScreenHeight;
+  String get connectedPcName => _connectedPcName;
+  bool get isReconnecting => _reconnectTimer?.isActive == true;
+  String get reconnectStatus => _reconnectStatus;
 
   void setTransport(TransportType type) {
     if (_state == ConnState.connected) return;
@@ -66,21 +83,45 @@ class TabletConnection extends ChangeNotifier {
   void setHost(String host) => _host = host;
   void setControlPort(int port) => _controlPort = port;
   void setVideoPort(int port) => _videoPort = port;
+  void setBtDevice(String address) => _btDeviceAddress = address;
+  void setAutoReconnect(bool value) => _autoReconnect = value;
 
   // ── Connect ─────────────────────────────────────────────────────────
   Future<bool> connect() async {
+    _reconnectTimer?.cancel();
+    _intentionalDisconnect = false;
     _state = ConnState.connecting;
     _errorMessage = '';
+    _reconnectStatus = '';
+    _connectedPcName = '';
     notifyListeners();
 
-    final host = _transportType == TransportType.usb ? '127.0.0.1' : _host;
+    String host;
+    switch (_transportType) {
+      case TransportType.usb:
+        host = '127.0.0.1';
+      case TransportType.bluetooth:
+        host = '127.0.0.1';
+        try {
+          await _channel.invokeMethod('startBluetoothBridge', {
+            'address': _btDeviceAddress,
+            'port': _controlPort,
+          });
+        } catch (e) {
+          _state = ConnState.error;
+          _errorMessage = 'Bluetooth: $e';
+          notifyListeners();
+          return false;
+        }
+      case TransportType.wifi:
+        host = _host;
+    }
 
     try {
-      // 1. Connect control channel
       _ctrlSocket = await Socket.connect(
         host,
         _controlPort,
-        timeout: const Duration(seconds: 5),
+        timeout: const Duration(seconds: 8),
       );
       debugPrint('Control connected to $host:$_controlPort');
 
@@ -97,24 +138,57 @@ class TabletConnection extends ChangeNotifier {
         },
         onError: (e) => debugPrint('Control error: $e'),
         onDone: () {
-          debugPrint('Control closed');
-          disconnect();
+          debugPrint('Control closed unexpectedly');
+          final wasIntentional = _intentionalDisconnect;
+          _disconnectSockets();
+          if (!wasIntentional && _autoReconnect) {
+            _scheduleReconnect();
+          }
         },
         cancelOnError: false,
       );
 
       _state = ConnState.connected;
+      _reconnectAttempt = 0;
       notifyListeners();
 
-      // 2. Connect video channel (optional)
-      _connectVideo(host);
+      // No video over Bluetooth (too slow)
+      if (_transportType != TransportType.bluetooth) {
+        _connectVideo(host);
+      }
       return true;
     } on SocketException catch (e) {
       _state = ConnState.error;
       _errorMessage = 'Cannot connect to $host:$_controlPort — ${e.message}';
+      if (_transportType == TransportType.bluetooth) {
+        await _channel.invokeMethod('stopBluetoothBridge').catchError((_) {});
+      }
       notifyListeners();
+      if (!_intentionalDisconnect && _autoReconnect) {
+        _scheduleReconnect();
+      }
       return false;
     }
+  }
+
+  void _scheduleReconnect() {
+    if (_intentionalDisconnect) return;
+    if (_reconnectAttempt >= _maxReconnectAttempts) {
+      _reconnectStatus = 'Nie udało się połączyć po $_maxReconnectAttempts próbach';
+      _state = ConnState.error;
+      notifyListeners();
+      return;
+    }
+
+    final delaySec = _reconnectDelays[_reconnectAttempt.clamp(0, _reconnectDelays.length - 1)];
+    _reconnectAttempt++;
+    _state = ConnState.disconnected;
+    _reconnectStatus = 'Próba $_reconnectAttempt/$_maxReconnectAttempts za ${delaySec}s…';
+    notifyListeners();
+
+    _reconnectTimer = Timer(Duration(seconds: delaySec), () {
+      if (!_intentionalDisconnect) connect();
+    });
   }
 
   void _handleControlMessage(String line) {
@@ -123,6 +197,7 @@ class TabletConnection extends ChangeNotifier {
       if (msg['type'] == 'screen_info') {
         _pcScreenWidth = (msg['width'] as num).toInt();
         _pcScreenHeight = (msg['height'] as num).toInt();
+        _connectedPcName = msg['hostname'] as String? ?? '';
         notifyListeners();
       }
     } catch (_) {
@@ -140,7 +215,6 @@ class TabletConnection extends ChangeNotifier {
       debugPrint('Video connected to $host:$_videoPort');
       _videoConnected = true;
       notifyListeners();
-
       _readVideoFrames();
     } catch (e) {
       debugPrint('Video connection failed (optional): $e');
@@ -178,10 +252,7 @@ class TabletConnection extends ChangeNotifier {
 
     while (true) {
       if (_expectedFrameSize == 0) {
-        // Need at least 4 bytes for header
         if (_videoBuffer.length < 4) break;
-
-        // Read 4-byte LE frame size
         _expectedFrameSize =
             _videoBuffer[0] |
             (_videoBuffer[1] << 8) |
@@ -190,13 +261,9 @@ class TabletConnection extends ChangeNotifier {
         _videoBuffer.removeRange(0, 4);
       }
 
-      // Need N bytes for frame
       if (_videoBuffer.length < _expectedFrameSize) break;
 
-      // Complete frame
-      _latestFrame = Uint8List.fromList(
-        _videoBuffer.sublist(0, _expectedFrameSize),
-      );
+      _latestFrame = Uint8List.fromList(_videoBuffer.sublist(0, _expectedFrameSize));
       _videoBuffer.removeRange(0, _expectedFrameSize);
       _expectedFrameSize = 0;
       _frameCount++;
@@ -214,6 +281,16 @@ class TabletConnection extends ChangeNotifier {
     }
   }
 
+  // ── Send shortcut ────────────────────────────────────────────────────
+  void sendShortcut(String name) {
+    if (!isConnected) return;
+    try {
+      _ctrlSocket!.write('${jsonEncode({'type': 'shortcut', 'name': name})}\n');
+    } catch (e) {
+      debugPrint('SendShortcut error: $e');
+    }
+  }
+
   // ── Send key event ───────────────────────────────────────────────────
   void sendKey(Map<String, dynamic> event) {
     if (!isConnected) return;
@@ -224,8 +301,17 @@ class TabletConnection extends ChangeNotifier {
     }
   }
 
-  // ── Disconnect ──────────────────────────────────────────────────────
+  // ── Disconnect (intentional) ─────────────────────────────────────────
   void disconnect() {
+    _intentionalDisconnect = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _reconnectAttempt = 0;
+    _reconnectStatus = '';
+    _disconnectSockets();
+  }
+
+  void _disconnectSockets() {
     _videoSubscription?.cancel();
     _videoSocket?.destroy();
     _videoSocket = null;
@@ -235,8 +321,13 @@ class TabletConnection extends ChangeNotifier {
     _ctrlSocket?.destroy();
     _ctrlSocket = null;
 
+    if (_transportType == TransportType.bluetooth) {
+      _channel.invokeMethod('stopBluetoothBridge').catchError((_) {});
+    }
+
     _expectedFrameSize = 0;
     _videoBuffer.clear();
+    _connectedPcName = '';
     _state = ConnState.disconnected;
     notifyListeners();
   }

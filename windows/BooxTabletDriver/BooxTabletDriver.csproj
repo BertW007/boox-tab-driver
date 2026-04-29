@@ -11,4 +11,8 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="InTheHand.Net.Bluetooth" Version="4.1.40" />
+  </ItemGroup>
+
 </Project>
