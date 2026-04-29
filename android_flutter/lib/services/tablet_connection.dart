@@ -24,6 +24,7 @@ class TabletConnection extends ChangeNotifier {
   int _videoPort = 52018;
   String _errorMessage = '';
   String _btDeviceAddress = '';
+  bool _videoEnabled = true;
 
   // ── Control socket ──────────────────────────────────────────────────
   Socket? _ctrlSocket;
@@ -73,6 +74,7 @@ class TabletConnection extends ChangeNotifier {
   String get connectedPcName => _connectedPcName;
   bool get isReconnecting => _reconnectTimer?.isActive == true;
   String get reconnectStatus => _reconnectStatus;
+  bool get videoEnabled => _videoEnabled;
 
   void setTransport(TransportType type) {
     if (_state == ConnState.connected) return;
@@ -85,6 +87,7 @@ class TabletConnection extends ChangeNotifier {
   void setVideoPort(int port) => _videoPort = port;
   void setBtDevice(String address) => _btDeviceAddress = address;
   void setAutoReconnect(bool value) => _autoReconnect = value;
+  void setVideoEnabled(bool value) => _videoEnabled = value;
 
   // ── Connect ─────────────────────────────────────────────────────────
   Future<bool> connect() async {
@@ -152,8 +155,7 @@ class TabletConnection extends ChangeNotifier {
       _reconnectAttempt = 0;
       notifyListeners();
 
-      // No video over Bluetooth (too slow)
-      if (_transportType != TransportType.bluetooth) {
+      if (_videoEnabled) {
         _connectVideo(host);
       }
       return true;

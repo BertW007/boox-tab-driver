@@ -99,6 +99,7 @@ sealed class TabletServer : IDisposable
 
                 await HandleClient(ct);
 
+                _injector.ReleaseAll();
                 Log("Device disconnected");
                 OnClientDisconnected?.Invoke();
             }

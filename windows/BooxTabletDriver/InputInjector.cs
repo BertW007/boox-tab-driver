@@ -332,6 +332,37 @@ sealed class InputInjector : IDisposable
         SendInput(1, [input], Marshal.SizeOf<INPUT>());
     }
 
+    // ── Shortcut injection ────────────────────────────────────────────
+    public void InjectShortcut(string name)
+    {
+        switch (name)
+        {
+            case "esc":        Tap(0x1B);                break;  // Escape
+            case "snip":       Combo(0xA0, 0x5B, 0x53); break;  // Shift+Win+S
+            case "copy":       Combo(0xA2, 0x43);        break;  // Ctrl+C
+            case "paste":      Combo(0xA2, 0x56);        break;  // Ctrl+V
+            case "tab":        Tap(0x09);                break;  // Tab
+            case "taskview":   Combo(0x5B, 0x09);        break;  // Win+Tab
+            case "alttab":     Combo(0xA4, 0x09);        break;  // Alt+Tab
+        }
+    }
+
+    // Tap a single key
+    private void Tap(ushort vk)
+    {
+        SendKeyEvent(vk, 0, 0);
+        SendKeyEvent(vk, 0, KEYEVENTF_KEYUP);
+    }
+
+    // Hold all keys in order, release in reverse
+    private void Combo(params ushort[] vks)
+    {
+        foreach (var vk in vks)
+            SendKeyEvent(vk, 0, 0);
+        foreach (var vk in vks.Reverse())
+            SendKeyEvent(vk, 0, KEYEVENTF_KEYUP);
+    }
+
     // ── Keyboard injection ─────────────────────────────────────────────
     private static readonly Dictionary<string, ushort> _keyLabelToVk = new()
     {
@@ -410,8 +441,20 @@ sealed class InputInjector : IDisposable
         System.Diagnostics.Debug.WriteLine($"[InputInjector] {msg}");
     }
 
-    public void Dispose()
+    public void ReleaseAll()
     {
         if (_penDown) PenUp();
+        ushort[] modifiers = [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C]; // Shift, Ctrl, Alt, Win
+        foreach (var vk in modifiers)
+            SendKeyEvent(vk, 0, KEYEVENTF_KEYUP);
+        // Release mouse buttons in case they're stuck
+        SendMouseEvent(0, 0, MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_MIDDLEUP, 0);
+    }
+
+    public void ReleaseAllModifiers() => ReleaseAll();
+
+    public void Dispose()
+    {
+        ReleaseAll();
     }
 }

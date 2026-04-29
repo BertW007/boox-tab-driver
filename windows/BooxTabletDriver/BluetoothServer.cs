@@ -85,6 +85,7 @@ sealed class BluetoothServer : IDisposable
                 catch { }
 
                 client.Close();
+                _injector.ReleaseAll();
                 Log($"Bluetooth device disconnected: {deviceName}");
                 OnClientDisconnected?.Invoke();
             }

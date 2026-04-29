@@ -33,6 +33,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final _softKbFocus = FocusNode();
   String _prevSoftKbText = '';
 
+  bool _videoEnabled = true;
+
   // Bluetooth device selection
   List<Map<String, String>> _btDevices = [];
   String? _selectedBtAddress;
@@ -121,6 +123,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _connection.setBtDevice(_selectedBtAddress!);
     }
 
+    _connection.setVideoEnabled(_videoEnabled);
     await _connection.connect();
   }
 
@@ -369,7 +372,10 @@ class _HomeScreenState extends State<HomeScreen> {
         final selected = _connection.transportType == type;
         return Expanded(
           child: GestureDetector(
-            onTap: () => _connection.setTransport(type),
+            onTap: () {
+              _connection.setTransport(type);
+              setState(() => _videoEnabled = type != TransportType.bluetooth);
+            },
             child: Container(
               margin: const EdgeInsets.symmetric(horizontal: 4),
               padding: const EdgeInsets.symmetric(vertical: 10),
@@ -528,6 +534,19 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: 12),
             ],
 
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Wideo (podgląd ekranu PC)'),
+              subtitle: Text(
+                _videoEnabled
+                    ? 'Strumień wideo włączony'
+                    : 'Wyłączone — sterowanie działa, bez podglądu',
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+              value: _videoEnabled,
+              onChanged: (v) => setState(() => _videoEnabled = v),
+            ),
+            const SizedBox(height: 8),
             TextField(
               controller: _portController,
               decoration: const InputDecoration(
