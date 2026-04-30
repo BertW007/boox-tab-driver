@@ -796,31 +796,47 @@ class _HomeScreenState extends State<HomeScreen> {
               child: const Text('⇪', style: TextStyle(fontSize: 14, color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           const Spacer(),
-          // Connection status
-          Column(
+          // Connection status — two columns
+          Row(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.end,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Text(
-                '$label${_connection.isVideoConnected ? ' 🖥' : ''}',
-                style: const TextStyle(color: Colors.white70, fontSize: 11),
-              ),
-              if (_connection.connectedPcName.isNotEmpty)
-                Text(
-                  _connection.connectedPcName,
-                  style: const TextStyle(color: Colors.white54, fontSize: 10),
-                ),
-              if (_connection.transportType == TransportType.wifi) ...[
-                if (_tabletIp.isNotEmpty)
+              // Col 1: mode + IPs
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
                   Text(
-                    '📱 $_tabletIp',
-                    style: const TextStyle(color: Colors.white54, fontSize: 10),
+                    '$label${_connection.isVideoConnected ? ' 🖥' : ''}',
+                    style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
                   ),
-                Text(
-                  '🖥 ${_connection.host}',
-                  style: const TextStyle(color: Colors.white54, fontSize: 10),
+                  if (_connection.connectedPcName.isNotEmpty)
+                    Text(_connection.connectedPcName,
+                        style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                  if (_connection.transportType == TransportType.wifi) ...[
+                    if (_tabletIp.isNotEmpty)
+                      Text('📱 $_tabletIp',
+                          style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                    Text('🖥 ${_connection.host}',
+                        style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                  ],
+                ],
+              ),
+              const SizedBox(width: 10),
+              // Col 2: transfer stats
+              if (_connection.isVideoConnected)
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text('${_connection.fpsNow} fps',
+                        style: const TextStyle(color: Colors.greenAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                    Text('${_fmtBytes(_connection.bpsNow)}/s',
+                        style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                    Text(_fmtBytes(_connection.totalVideoBytes),
+                        style: const TextStyle(color: Colors.white38, fontSize: 10)),
+                  ],
                 ),
-              ],
             ],
           ),
           const SizedBox(width: 8),
@@ -892,6 +908,8 @@ class _HomeScreenState extends State<HomeScreen> {
         final canvasSize = constraints.biggest;
         return Focus(
           autofocus: true,
+          child: MouseRegion(
+          cursor: SystemMouseCursors.none,
           child: Listener(
             onPointerDown: (e) => _handlePointerEvent('down', e, canvasSize),
             onPointerMove: (e) => _handlePointerEvent('move', e, canvasSize),
@@ -948,9 +966,16 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
+          ), // MouseRegion
         );
       },
     );
+  }
+
+  static String _fmtBytes(int b) {
+    if (b >= 1024 * 1024) return '${(b / 1024 / 1024).toStringAsFixed(1)} MB';
+    if (b >= 1024)        return '${(b / 1024).toStringAsFixed(0)} KB';
+    return '$b B';
   }
 
   Widget _maybeInvert(Widget child) {

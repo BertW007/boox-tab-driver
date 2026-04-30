@@ -42,6 +42,16 @@ class TabletConnection extends ChangeNotifier {
   Uint8List? _latestFrame;
   int _frameCount = 0;
 
+  // ── Transfer stats ───────────────────────────────────────────────────
+  int _totalVideoBytes = 0;
+  int _totalCtrlBytes  = 0;
+  int _framesLastSec   = 0;
+  int _bytesLastSec    = 0;
+  int _fpsNow          = 0;
+  int _bpsNow          = 0;
+  DateTime _statsWindow = DateTime.now();
+  Timer? _statsTimer;
+
   // ── PC screen / connection info ─────────────────────────────────────
   int _pcScreenWidth = 1920;
   int _pcScreenHeight = 1080;
@@ -72,7 +82,11 @@ class TabletConnection extends ChangeNotifier {
   int get controlPort => _controlPort;
   int get videoPort => _videoPort;
   Uint8List? get latestFrame => _latestFrame;
-  int get frameCount => _frameCount;
+  int get frameCount      => _frameCount;
+  int get totalVideoBytes => _totalVideoBytes;
+  int get totalCtrlBytes  => _totalCtrlBytes;
+  int get fpsNow          => _fpsNow;
+  int get bpsNow          => _bpsNow;
   int get pcScreenWidth => _pcScreenWidth;
   int get pcScreenHeight => _pcScreenHeight;
   String get connectedPcName => _connectedPcName;
@@ -183,6 +197,14 @@ class TabletConnection extends ChangeNotifier {
 
       _state = ConnState.connected;
       _reconnectAttempt = 0;
+      _totalVideoBytes = 0;
+      _totalCtrlBytes  = 0;
+      _frameCount      = 0;
+      _framesLastSec   = 0;
+      _bytesLastSec    = 0;
+      _statsWindow     = DateTime.now();
+      _statsTimer?.cancel();
+      _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateStats());
       notifyListeners();
 
       if (_videoEnabled) {
@@ -293,7 +315,17 @@ class TabletConnection extends ChangeNotifier {
     );
   }
 
+  void _updateStats() {
+    _fpsNow        = _framesLastSec;
+    _bpsNow        = _bytesLastSec;
+    _framesLastSec = 0;
+    _bytesLastSec  = 0;
+    notifyListeners();
+  }
+
   void _processVideoData(Uint8List data) {
+    _totalVideoBytes += data.length;
+    _bytesLastSec    += data.length;
     _videoBuffer.addAll(data);
 
     while (true) {
@@ -313,6 +345,7 @@ class TabletConnection extends ChangeNotifier {
       _videoBuffer.removeRange(0, _expectedFrameSize);
       _expectedFrameSize = 0;
       _frameCount++;
+      _framesLastSec++;
       notifyListeners();
     }
   }
@@ -388,6 +421,7 @@ class TabletConnection extends ChangeNotifier {
 
   @override
   void dispose() {
+    _statsTimer?.cancel();
     disconnect();
     super.dispose();
   }
