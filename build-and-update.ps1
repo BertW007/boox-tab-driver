@@ -38,6 +38,6 @@ New-Item -ItemType Directory -Force -Path $bin | Out-Null
 Copy-Item "$staging\BooxTabletDriver.exe" $exe -Force
 Write-Host "      Copied" -ForegroundColor Green
 
-Write-Host "[4/4] Starting with --autostart..." -ForegroundColor Cyan
-Start-Process $exe -ArgumentList "--autostart"
+Write-Host "[4/4] Starting Main with --autostart..." -ForegroundColor Cyan
+Start-Process $exe -ArgumentList "--name Main --autostart"
 Write-Host "      Started. Tablet will reconnect automatically." -ForegroundColor Green
