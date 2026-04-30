@@ -15,6 +15,7 @@ static class CursorTracker
 
     [DllImport("user32.dll")] static extern bool GetCursorInfo(ref CURSORINFO pci);
     [DllImport("user32.dll")] static extern IntPtr LoadCursor(IntPtr hInst, int id);
+    [DllImport("user32.dll")] static extern short GetKeyState(int nVirtKey);
 
     const int OCR_NORMAL   = 32512;
     const int OCR_IBEAM    = 32513;
@@ -56,6 +57,10 @@ static class CursorTracker
             if (h == ci.hCursor) return name;
         return "arrow";
     }
+
+    public static bool CapsLock    => (GetKeyState(0x14) & 1) != 0;
+    public static bool NumLock     => (GetKeyState(0x90) & 1) != 0;
+    public static bool ScrollLock  => (GetKeyState(0x91) & 1) != 0;
 }
 
 enum TransportMode { WiFi, Usb, Bluetooth }
@@ -200,17 +205,30 @@ sealed class TabletServer : IDisposable
 
     private async Task PollCursorAsync(CancellationToken ct)
     {
-        var last = "";
+        var lastCursor = "";
+        var lastCaps   = false;
+        var lastNum    = false;
+        var lastScroll = false;
         try
         {
             while (!ct.IsCancellationRequested && _stream != null)
             {
-                var shape = CursorTracker.GetShape();
-                if (shape != last)
+                var shape  = CursorTracker.GetShape();
+                var caps   = CursorTracker.CapsLock;
+                var num    = CursorTracker.NumLock;
+                var scroll = CursorTracker.ScrollLock;
+
+                var sb = new System.Text.StringBuilder();
+                if (shape != lastCursor) { lastCursor = shape; sb.Append($"{{\"type\":\"cursor\",\"shape\":\"{shape}\"}}\n"); }
+                if (caps   != lastCaps   || num != lastNum || scroll != lastScroll)
                 {
-                    last = shape;
-                    var msg = $"{{\"type\":\"cursor\",\"shape\":\"{shape}\"}}\n";
-                    try { await _stream.WriteAsync(Encoding.UTF8.GetBytes(msg), ct); }
+                    lastCaps = caps; lastNum = num; lastScroll = scroll;
+                    sb.Append($"{{\"type\":\"led\",\"caps\":{(caps ? "true" : "false")},\"num\":{(num ? "true" : "false")},\"scroll\":{(scroll ? "true" : "false")}}}\n");
+                }
+
+                if (sb.Length > 0)
+                {
+                    try { await _stream.WriteAsync(Encoding.UTF8.GetBytes(sb.ToString()), ct); }
                     catch { break; }
                 }
                 await Task.Delay(80, ct);

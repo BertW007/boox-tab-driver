@@ -290,16 +290,9 @@ sealed class InputInjector : IDisposable
     private void InjectMouseMove(float x, float y)
     {
         var (px, py) = MapCoords(x, y);
-        var flags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK;
-        if (_penDown)
-        {
-            flags |= _penButton switch {
-                "secondary" => MOUSEEVENTF_RIGHTDOWN,
-                "middle"    => MOUSEEVENTF_MIDDLEDOWN,
-                _           => MOUSEEVENTF_LEFTDOWN,
-            };
-        }
-        SendMouseEvent(px, py, flags, 0);
+        // Only MOVE — button stays held from the initial Down event.
+        // Re-sending LEFTDOWN on every move event confuses apps like Snip tool.
+        SendMouseEvent(px, py, MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK, 0);
     }
 
     private void InjectMouseUp(string button = "primary")
@@ -335,6 +328,7 @@ sealed class InputInjector : IDisposable
     // ── Shortcut injection ────────────────────────────────────────────
     public void InjectShortcut(string name)
     {
+        ReleaseAll();
         switch (name)
         {
             case "esc":        Tap(0x1B);                break;  // Escape

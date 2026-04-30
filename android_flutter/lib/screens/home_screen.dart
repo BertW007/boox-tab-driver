@@ -698,6 +698,16 @@ class _HomeScreenState extends State<HomeScreen> {
           if (!_physicalKbConnected)
             _barBtn(label: '⌨', active: _softKbVisible, tooltip: 'Klawiatura ekranowa',
                 onTap: _toggleSoftKb),
+          if (_connection.capsLock)
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade700,
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: const Text('⇪', style: TextStyle(fontSize: 14, color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
           const Spacer(),
           // Connection status
           Column(
@@ -823,17 +833,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   Positioned.fill(
                     child: IgnorePointer(
                       child: CustomPaint(painter: _GridPainter()),
-                    ),
-                  ),
-
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: CustomPaint(
-                        painter: _StrokePainter(
-                          completedStrokes: _completedStrokes,
-                          currentStroke: _currentStroke,
-                        ),
-                      ),
                     ),
                   ),
 

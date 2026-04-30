@@ -48,6 +48,9 @@ class TabletConnection extends ChangeNotifier {
   String _connectedPcName = '';
   String _ctrlBuffer = '';
   String _cursorShape = 'arrow';
+  bool _capsLock = false;
+  bool _numLock = false;
+  bool _scrollLock = false;
 
   // ── Auto-reconnect ──────────────────────────────────────────────────
   bool _intentionalDisconnect = false;
@@ -74,6 +77,9 @@ class TabletConnection extends ChangeNotifier {
   int get pcScreenHeight => _pcScreenHeight;
   String get connectedPcName => _connectedPcName;
   String get cursorShape => _cursorShape;
+  bool get capsLock => _capsLock;
+  bool get numLock => _numLock;
+  bool get scrollLock => _scrollLock;
   bool get isReconnecting => _reconnectTimer?.isActive == true;
   String get reconnectStatus => _reconnectStatus;
   bool get videoEnabled => _videoEnabled;
@@ -229,6 +235,14 @@ class TabletConnection extends ChangeNotifier {
         final shape = msg['shape'] as String? ?? 'arrow';
         if (shape != _cursorShape) {
           _cursorShape = shape;
+          notifyListeners();
+        }
+      } else if (msg['type'] == 'led') {
+        final caps   = msg['caps']   as bool? ?? _capsLock;
+        final num    = msg['num']    as bool? ?? _numLock;
+        final scroll = msg['scroll'] as bool? ?? _scrollLock;
+        if (caps != _capsLock || num != _numLock || scroll != _scrollLock) {
+          _capsLock = caps; _numLock = num; _scrollLock = scroll;
           notifyListeners();
         }
       }
