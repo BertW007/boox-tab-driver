@@ -28,6 +28,9 @@ sealed class MainForm : Form
     private readonly TrackBar _fpsSlider = new() { Minimum = 1, Maximum = 25, Value = 12, TickFrequency = 4, Width = 140 };
     private readonly ComboBox _modeSelector = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
 
+    private static readonly string SettingsPath =
+        Path.Combine(AppContext.BaseDirectory, "boox-settings.json");
+
     public MainForm()
     {
         Text = "Boox Tablet Driver";
@@ -46,6 +49,7 @@ sealed class MainForm : Form
 
         BuildUI();
         WireEvents();
+        LoadSettings();
         UpdateStatus("Stopped", Color.Gray);
         _backendLabel.Text = $"Backend: {DescribeBackend(_injector.Backend)}";
 
@@ -55,6 +59,9 @@ sealed class MainForm : Form
             AppendLog("WARNING: Not running as Administrator — Touch Injection and firewall setup unavailable.");
             AppendLog("Right-click BooxTabletDriver.exe → Run as administrator.");
         }
+
+        if (Environment.GetCommandLineArgs().Contains("--autostart"))
+            Shown += (_, _) => StartAll();
     }
 
     private void BuildUI()
@@ -180,6 +187,7 @@ sealed class MainForm : Form
 
     private void StartAll()
     {
+        SaveSettings();
         UpdateServerPort();
         UpdateVideoPort();
 
@@ -377,6 +385,39 @@ sealed class MainForm : Form
         InjectorBackend.Mouse => "SendInput (mysz, brak nacisku)",
         _ => "Brak",
     };
+
+    private void SaveSettings()
+    {
+        try
+        {
+            var s = new
+            {
+                port      = (int)_portInput.Value,
+                videoPort = (int)_videoPortInput.Value,
+                mode      = _modeSelector.SelectedIndex,
+                fps       = _fpsSlider.Value,
+                mirror    = _mirrorCheck.Checked,
+            };
+            File.WriteAllText(SettingsPath, System.Text.Json.JsonSerializer.Serialize(s));
+        }
+        catch { }
+    }
+
+    private void LoadSettings()
+    {
+        try
+        {
+            if (!File.Exists(SettingsPath)) return;
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(SettingsPath));
+            var r = doc.RootElement;
+            if (r.TryGetProperty("port",      out var p))   _portInput.Value           = Math.Clamp(p.GetInt32(),   1024, 65535);
+            if (r.TryGetProperty("videoPort", out var vp))  _videoPortInput.Value      = Math.Clamp(vp.GetInt32(),  1024, 65535);
+            if (r.TryGetProperty("mode",      out var m))   _modeSelector.SelectedIndex = Math.Clamp(m.GetInt32(),  0, 2);
+            if (r.TryGetProperty("fps",       out var fps)) _fpsSlider.Value            = Math.Clamp(fps.GetInt32(), 1, 25);
+            if (r.TryGetProperty("mirror",    out var mir)) _mirrorCheck.Checked        = mir.GetBoolean();
+        }
+        catch { }
+    }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
