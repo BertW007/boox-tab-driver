@@ -33,6 +33,18 @@ class _HomeScreenState extends State<HomeScreen> {
   final _softKbFocus = FocusNode();
   String _prevSoftKbText = '';
 
+  static const _profiles = [
+    {'name': 'Main',   'port': '52017', 'videoPort': '52018'},
+    {'name': 'Backup', 'port': '52019', 'videoPort': '52020'},
+  ];
+  int _activeProfile = 0;
+
+  void _applyProfile(int index) {
+    setState(() => _activeProfile = index);
+    _portController.text      = _profiles[index]['port']!;
+    _videoPortController.text = _profiles[index]['videoPort']!;
+  }
+
   bool _videoEnabled = true;
   bool _touchLocked = false;
   Offset? _hoverPos;
@@ -73,7 +85,9 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _onHardwareKey(KeyEvent event) {
     if (!_connection.isConnected) return false;
     _handleKeyEvent(event);
-    return false;
+    // Consume the event so Android/BOOX OS doesn't also act on it
+    // (prevents Alt+Tab switching apps, PrintScreen taking screenshots, etc.)
+    return true;
   }
 
   Future<void> _fetchTabletIp() async {
@@ -490,6 +504,52 @@ class _HomeScreenState extends State<HomeScreen> {
 
             _buildTransportSelector(),
             const SizedBox(height: 16),
+
+            // Server profile toggle (Main / Backup)
+            if (_connection.transportType == TransportType.wifi) ...[
+              Row(
+                children: List.generate(_profiles.length, (i) {
+                  final selected = _activeProfile == i;
+                  final p = _profiles[i];
+                  return Expanded(
+                    child: GestureDetector(
+                      onTap: () => _applyProfile(i),
+                      child: Container(
+                        margin: EdgeInsets.only(right: i < _profiles.length - 1 ? 6 : 0),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: selected
+                                ? Theme.of(context).colorScheme.primary
+                                : Theme.of(context).colorScheme.outline,
+                            width: 2,
+                          ),
+                        ),
+                        child: Column(
+                          children: [
+                            Text(p['name']!,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: selected ? Colors.white : Theme.of(context).colorScheme.onSurface)),
+                            Text('${p['port']} / ${p['videoPort']}',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: selected ? Colors.white70 : Theme.of(context).colorScheme.onSurfaceVariant)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+              const SizedBox(height: 12),
+            ],
 
             if (_connection.transportType == TransportType.wifi) ...[
               TextField(
