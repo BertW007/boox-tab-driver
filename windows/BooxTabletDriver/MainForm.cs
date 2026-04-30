@@ -35,7 +35,12 @@ sealed class MainForm : Form
         var args = Environment.GetCommandLineArgs();
         var idx = Array.IndexOf(args, "--settings");
         if (idx >= 0 && idx + 1 < args.Length)
-            return Path.GetFullPath(args[idx + 1]);
+        {
+            var p = args[idx + 1];
+            if (!Path.IsPathRooted(p))
+                p = Path.Combine(AppContext.BaseDirectory, p);
+            return Path.GetFullPath(p);
+        }
         return Path.Combine(AppContext.BaseDirectory, "boox-settings.json");
     }
 

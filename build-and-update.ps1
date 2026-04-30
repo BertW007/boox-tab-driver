@@ -39,5 +39,5 @@ Copy-Item "$staging\BooxTabletDriver.exe" $exe -Force
 Write-Host "      Copied" -ForegroundColor Green
 
 Write-Host "[4/4] Starting Main with --autostart..." -ForegroundColor Cyan
-Start-Process $exe -ArgumentList "--name Main --autostart"
+Start-Process $exe -ArgumentList "--name Main --autostart" -WorkingDirectory $bin
 Write-Host "      Started. Tablet will reconnect automatically." -ForegroundColor Green

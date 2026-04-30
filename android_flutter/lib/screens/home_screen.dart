@@ -941,7 +941,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
 
-                  if (_hoverPos != null && _connection.cursorShape != 'arrow')
+                  if (_hoverPos != null)
                     Positioned.fill(
                       child: IgnorePointer(
                         child: CustomPaint(
