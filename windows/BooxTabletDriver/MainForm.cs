@@ -28,12 +28,23 @@ sealed class MainForm : Form
     private readonly TrackBar _fpsSlider = new() { Minimum = 1, Maximum = 25, Value = 12, TickFrequency = 4, Width = 140 };
     private readonly ComboBox _modeSelector = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
 
-    private static readonly string SettingsPath =
-        Path.Combine(AppContext.BaseDirectory, "boox-settings.json");
+    private static readonly string SettingsPath = ResolveSettingsPath();
+
+    private static string ResolveSettingsPath()
+    {
+        var args = Environment.GetCommandLineArgs();
+        var idx = Array.IndexOf(args, "--settings");
+        if (idx >= 0 && idx + 1 < args.Length)
+            return Path.GetFullPath(args[idx + 1]);
+        return Path.Combine(AppContext.BaseDirectory, "boox-settings.json");
+    }
 
     public MainForm()
     {
-        Text = "Boox Tablet Driver";
+        var args = Environment.GetCommandLineArgs();
+        var nameIdx = Array.IndexOf(args, "--name");
+        var instanceName = nameIdx >= 0 && nameIdx + 1 < args.Length ? args[nameIdx + 1] : null;
+        Text = instanceName != null ? $"Boox Tablet Driver [{instanceName}]" : "Boox Tablet Driver";
         Size = new Size(560, 660);
         MinimumSize = new Size(440, 500);
         FormBorderStyle = FormBorderStyle.FixedSingle;
