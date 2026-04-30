@@ -200,6 +200,33 @@ class _HomeScreenState extends State<HomeScreen> {
     _connection.sendKey({'type': 'key', 'action': 'up',   'char': char, 'label': label, 'logical': logical});
   }
 
+  // Bar shortcut sequences — each entry is {label, char} for InjectKey VK path.
+  // char must be '' so InjectKey uses the label→VK lookup, not Unicode bypass.
+  static const _shortcutSeqs = <String, List<Map<String, String>>>{
+    'esc':         [{'label': 'Escape',       'char': ''}],
+    'printscreen': [{'label': 'Print Screen', 'char': ''}],
+    'snip':        [{'label': 'Shift Left',   'char': ''},
+                    {'label': 'Meta Left',    'char': ''},
+                    {'label': 's',            'char': ''}],
+    'copy':        [{'label': 'Control Left', 'char': ''}, {'label': 'c', 'char': ''}],
+    'paste':       [{'label': 'Control Left', 'char': ''}, {'label': 'v', 'char': ''}],
+    'tab':         [{'label': 'Tab',          'char': ''}],
+    'taskview':    [{'label': 'Meta Left',    'char': ''}, {'label': 'Tab', 'char': ''}],
+    'alttab':      [{'label': 'Alt Left',     'char': ''}, {'label': 'Tab', 'char': ''}],
+  };
+
+  void _injectShortcut(String name) {
+    final seq = _shortcutSeqs[name];
+    if (seq == null) return;
+    _connection.sendReleaseAll();
+    for (final k in seq) {
+      _connection.sendKey({'type': 'key', 'action': 'down', 'char': k['char']!, 'label': k['label']!, 'logical': 0});
+    }
+    for (final k in seq.reversed) {
+      _connection.sendKey({'type': 'key', 'action': 'up',   'char': k['char']!, 'label': k['label']!, 'logical': 0});
+    }
+  }
+
   void _onSoftKbChanged(String value) {
     if (!_connection.isConnected) return;
     if (value.length > _prevSoftKbText.length) {
@@ -659,7 +686,7 @@ class _HomeScreenState extends State<HomeScreen> {
             return Tooltip(
               message: tooltip,
               child: GestureDetector(
-                onTap: () => _connection.sendShortcut(name),
+                onTap: () => _injectShortcut(name),
                 child: Container(
                   margin: const EdgeInsets.symmetric(horizontal: 2),
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),

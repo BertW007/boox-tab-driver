@@ -21,6 +21,12 @@ static class ProtocolHandler
                 return;
             }
 
+            if (type == "release_all")
+            {
+                injector.ReleaseAll();
+                return;
+            }
+
             if (type == "shortcut")
             {
                 var name = root.TryGetProperty("name", out var nP) ? nP.GetString() ?? "" : "";

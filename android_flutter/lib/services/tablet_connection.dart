@@ -327,6 +327,14 @@ class TabletConnection extends ChangeNotifier {
     }
   }
 
+  // ── Release all held keys/buttons ───────────────────────────────────
+  void sendReleaseAll() {
+    if (!isConnected) return;
+    try {
+      _ctrlSocket!.write('${jsonEncode({'type': 'release_all'})}\n');
+    } catch (_) {}
+  }
+
   // ── Send shortcut ────────────────────────────────────────────────────
   void sendShortcut(String name) {
     if (!isConnected) return;
